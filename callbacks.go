@@ -34,6 +34,21 @@ type Callbacks struct {
 	// handshake has not yet occurred. This is a good time to alter the supported extension
 	// protocols.
 	PeerConnAdded []func(*PeerConn)
+	// Called whenever the speed-based steal override (applyRequestState, scoped to
+	// PiecePriorityNow requests) actually reassigns a request from a slow/stalled peer to a
+	// faster one. The plain count-based "don't steal from the poor" fairness check never
+	// triggers this. Diagnostic only: lets a caller log which now-priority pieces actually got
+	// rescued by the override versus which had no eligible faster peer to steal from at all.
+	NowPriorityStealBySpeed []func(NowPriorityStealEvent)
+}
+
+type NowPriorityStealEvent struct {
+	Torrent      *Torrent
+	Piece        int
+	Stealer      *Peer
+	Existing     *Peer
+	StealerRate  float64
+	ExistingRate float64
 }
 
 type ReceivedUsefulDataEvent = PeerMessageEvent

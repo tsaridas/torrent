@@ -349,10 +349,23 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 				// runs under the Client lock, and Peer.DownloadRate (exported)
 				// takes p.locker().RLock() itself, which deadlocks by
 				// re-entering the same non-reentrant RWMutex on this goroutine.
+				stealerRate, existingRate := p.downloadRate(), existing.downloadRate()
 				allowSteal = stealAllowedBySpeed(
-					p.downloadRate(), existing.downloadRate(),
+					stealerRate, existingRate,
 					existing.lastUsefulChunkReceived, time.Now(),
 				)
+				if allowSteal {
+					for _, f := range t.cl.config.Callbacks.NowPriorityStealBySpeed {
+						f(NowPriorityStealEvent{
+							Torrent:      t,
+							Piece:        t.pieceIndexOfRequestIndex(req),
+							Stealer:      p,
+							Existing:     existing,
+							StealerRate:  stealerRate,
+							ExistingRate: existingRate,
+						})
+					}
+				}
 			}
 			if !allowSteal {
 				continue
