@@ -215,6 +215,30 @@ func (p *Piece) SetPriority(prio PiecePriority) {
 	p.t.updatePiecePriority(p.index, "Piece.SetPriority")
 }
 
+// SetPriorityNow sets the piece's priority to PiecePriorityNow and always
+// broadcasts an immediate request-state re-evaluation to every eligible
+// connected peer, even when the piece was already pending at a lower
+// priority. Plain SetPriority only broadcasts on a not-pending-to-pending
+// transition (see updatePiecePriorityNoTriggers's _pendingPieces bitmap
+// add): a routine readahead hint commonly makes a piece pending well before
+// a live playback read escalates it to Now, so that escalation is silent
+// under SetPriority, and the speed-based steal override in
+// applyRequestState (scoped to PiecePriorityNow requests) then only gets
+// evaluated whenever some other peer's own scheduling loop next happens to
+// run on its own -- not guaranteed to happen within a real HLS player's
+// sub-second abort budget. Use this instead of SetPriority(PiecePriorityNow)
+// for a genuine "needed right now" playback read.
+func (p *Piece) SetPriorityNow() {
+	p.t.cl.lock()
+	defer p.t.cl.unlock()
+	p.priority = PiecePriorityNow
+	p.t.updatePiecePriorityNoTriggers(p.index)
+	p.t.updatePieceRequestOrderPiece(p.index)
+	if !p.t.disableTriggers {
+		p.t.onPiecePendingTriggers(p.index, "Piece.SetPriorityNow")
+	}
+}
+
 // This is priority based only on piece, file and reader priorities.
 func (p *Piece) purePriority() (ret PiecePriority) {
 	for _, f := range p.files {
