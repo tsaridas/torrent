@@ -388,6 +388,18 @@ func (p Piece) SetPriority(prio PiecePriority) {
 	p.t.updatePiecePriority(p.Index(), "Piece.SetPriority")
 }
 
+// SetPriorityNow sets PiecePriorityNow and always updates peer requests, even if the piece
+// was already pending (unlike SetPriority, which only triggers on pending-set changes).
+func (p Piece) SetPriorityNow() {
+	p.t.cl.lock()
+	defer p.t.cl.unlock()
+	p.state().priority = PiecePriorityNow
+	p.t.updatePiecePriorityNoRequests(p.Index())
+	if !p.t.disableTriggers {
+		p.t.updatePeerRequestsForPiece(p.Index(), "Piece.SetPriorityNow")
+	}
+}
+
 // This is priority based only on piece, file and reader priorities.
 func (p Piece) purePriority() (ret PiecePriority) {
 	for _, f := range p.files() {

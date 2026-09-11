@@ -41,3 +41,13 @@ func initDurationFromEnv(key string, defaultValue time.Duration) time.Duration {
 	panicif.Err(err)
 	return d
 }
+
+func initFloatFromEnv(key string, defaultValue float64) float64 {
+	s := os.Getenv(key)
+	if s == "" {
+		return defaultValue
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	panicif.Err(err)
+	return f
+}
