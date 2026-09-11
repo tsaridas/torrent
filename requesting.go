@@ -420,13 +420,15 @@ func (p *PeerConn) applyRequestState(next desiredRequestState) {
 			// For PiecePriorityNow only, also steal from a stalled or much slower holder.
 			// Use downloadRate (not DownloadRate) — we already hold the Client lock.
 			if !allowSteal && t.pieceIsNowPriority(req) {
+				cfg := t.cl.config
 				stealerRate, existingRate := p.downloadRate(), existing.downloadRate()
 				allowSteal = stealAllowedBySpeed(
 					stealerRate, existingRate,
 					existing.lastUsefulChunkReceived, time.Now(),
+					cfg.NowPriorityStealSpeedFactor, cfg.NowPriorityStealStallThreshold,
 				)
 				if allowSteal {
-					for _, f := range t.cl.config.Callbacks.NowPriorityStealBySpeed {
+					for _, f := range cfg.Callbacks.NowPriorityStealBySpeed {
 						f(NowPriorityStealEvent{
 							Torrent:      t,
 							Piece:        t.pieceIndexOfRequestIndex(req),
@@ -491,20 +493,19 @@ const (
 	enableUpdateRequestsTimer   = false
 )
 
-// Speed-based steal for PiecePriorityNow: >stealSpeedFactor faster, or holder quiet.
-const (
-	stealSpeedFactor         = 1.5
-	stealSpeedStallThreshold = 2 * time.Second
-)
-
 func (t *Torrent) pieceIsNowPriority(req RequestIndex) bool {
 	return t.piece(t.pieceIndexOfRequestIndex(req)).purePriority() == PiecePriorityNow
 }
 
-// stealAllowedBySpeed reports whether a now-priority request may be stolen by speed/stall.
-// A zero existingLast counts as stalled.
-func stealAllowedBySpeed(stealerRate, existingRate float64, existingLast, now time.Time) bool {
-	stalled := existingLast.IsZero() || now.Sub(existingLast) > stealSpeedStallThreshold
-	fasterEnough := stealerRate > 0 && stealerRate > existingRate*stealSpeedFactor
+// Speed-based steal for PiecePriorityNow. factor <= 1 disables the rate check;
+// stall <= 0 disables the quiet-holder check.
+func stealAllowedBySpeed(
+	stealerRate, existingRate float64,
+	existingLast, now time.Time,
+	factor float64,
+	stall time.Duration,
+) bool {
+	stalled := stall > 0 && (existingLast.IsZero() || now.Sub(existingLast) > stall)
+	fasterEnough := factor > 1 && stealerRate > 0 && stealerRate > existingRate*factor
 	return stalled || fasterEnough
 }

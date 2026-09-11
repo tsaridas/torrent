@@ -1617,8 +1617,12 @@ func (me *PeerConn) peerPtr() *Peer {
 
 // The actual value to use as the maximum outbound requests.
 func (cn *PeerConn) nominalMaxRequests() maxRequests {
+	var bypass maxRequests
+	if cn.t != nil && cn.t.cl != nil && cn.t.cl.config != nil {
+		bypass = cn.t.cl.config.NowPrioritySlowStartRequests
+	}
 	return nominalMaxRequestsForPeakRequests(
-		cn.PeerMaxRequests, cn.peakRequests, maxLocalToRemoteRequests,
+		cn.PeerMaxRequests, cn.peakRequests, maxLocalToRemoteRequests, bypass,
 		cn.hasWantedNowPriorityPiece(),
 	)
 }

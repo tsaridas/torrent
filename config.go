@@ -122,6 +122,20 @@ type ClientConfig struct {
 	// tunnelled path it is not.
 	StealRequestGrace time.Duration
 
+	// NowPriorityStealSpeedFactor allows stealing a PiecePriorityNow request the count-based
+	// check would deny when the stealer's download rate exceeds the holder's by more than this
+	// factor. Values <= 1 disable the speed half of the override. See also
+	// NowPriorityStealStallThreshold. NewDefaultClientConfig leaves this at 0 (disabled).
+	NowPriorityStealSpeedFactor float64
+	// NowPriorityStealStallThreshold allows stealing a PiecePriorityNow request when the holder
+	// has not delivered a useful chunk for this long. Zero or negative disables the stall half
+	// of the override.
+	NowPriorityStealStallThreshold time.Duration
+	// NowPrioritySlowStartRequests is the initial outstanding-request budget for a fresh peer
+	// (peakRequests still 0) that has an incomplete PiecePriorityNow piece. Zero or negative
+	// keeps the ordinary slow-start floor of 1.
+	NowPrioritySlowStartRequests maxRequests
+
 	// User-provided Client peer ID. If not present, one is generated automatically.
 	PeerID string
 	// For the bittorrent protocol.
@@ -293,16 +307,19 @@ func NewDefaultClientConfig() *ClientConfig {
 			Preferred:        true,
 			RequirePreferred: false,
 		},
-		CryptoSelector:         mse.DefaultCryptoSelector,
-		CryptoProvides:         mse.AllSupportedCrypto,
-		ListenPort:             42069,
-		Extensions:             defaultPeerExtensionBytes(),
-		DialForPeerConns:       true,
-		AcceptPeerConnections:  true,
-		MaxUnverifiedBytes:     64 << 20,
-		StealRequestGrace:      initDurationFromEnv(stealRequestGraceEnvKey, defaultStealRequestGrace),
-		DialRateLimiter:        rate.NewLimiter(10, 10),
-		PieceHashersPerTorrent: 2,
+		CryptoSelector:                 mse.DefaultCryptoSelector,
+		CryptoProvides:                 mse.AllSupportedCrypto,
+		ListenPort:                     42069,
+		Extensions:                     defaultPeerExtensionBytes(),
+		DialForPeerConns:               true,
+		AcceptPeerConnections:          true,
+		MaxUnverifiedBytes:             64 << 20,
+		StealRequestGrace:              initDurationFromEnv(stealRequestGraceEnvKey, defaultStealRequestGrace),
+		NowPriorityStealSpeedFactor:    initFloatFromEnv(nowPriorityStealSpeedFactorEnvKey, 0),
+		NowPriorityStealStallThreshold: initDurationFromEnv(nowPriorityStealStallThresholdEnvKey, 0),
+		NowPrioritySlowStartRequests:   maxRequests(initIntFromEnv(nowPrioritySlowStartRequestsEnvKey, 0, 32)),
+		DialRateLimiter:                rate.NewLimiter(10, 10),
+		PieceHashersPerTorrent:         2,
 	}
 	cc.DhtStartingNodes = func(network string) dht.StartingNodesGetter {
 		return func() ([]dht.Addr, error) { return dht.GlobalBootstrapAddrs(network) }

@@ -265,17 +265,17 @@ var (
 	maxLocalToRemoteRequests = (writeBufferHighWaterLen - writeBufferLowWaterLen - interestedMsgLen) / requestMsgLen
 )
 
-// Initial request budget for a fresh peer that has an incomplete PiecePriorityNow piece.
-const nowPrioritySlowStartBypass = 8
-
-// nominalMaxRequestsForPeakRequests is the slow-start request cap, optionally bypassed for
-// fresh peers (peakRequests==0) that have a now-priority piece.
-func nominalMaxRequestsForPeakRequests(peerMaxRequests, peakRequests, maxLocalToRemote maxRequests, hasNowPiece bool) maxRequests {
+// nominalMaxRequestsForPeakRequests is the slow-start request cap. bypass is applied only for
+// fresh peers (peakRequests==0) that have a now-priority piece; bypass <= 0 disables it.
+func nominalMaxRequestsForPeakRequests(
+	peerMaxRequests, peakRequests, maxLocalToRemote, bypass maxRequests,
+	hasNowPiece bool,
+) maxRequests {
 	base := max(1, min(peerMaxRequests, peakRequests*2, maxLocalToRemote))
-	if peakRequests > 0 || !hasNowPiece {
+	if peakRequests > 0 || !hasNowPiece || bypass <= 0 {
 		return base
 	}
-	return max(base, min(peerMaxRequests, nowPrioritySlowStartBypass, maxLocalToRemote))
+	return max(base, min(peerMaxRequests, bypass, maxLocalToRemote))
 }
 
 // hasWantedNowPriorityPiece reports whether the peer has any incomplete reader-Now piece.
