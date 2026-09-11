@@ -388,20 +388,8 @@ func (p Piece) SetPriority(prio PiecePriority) {
 	p.t.updatePiecePriority(p.Index(), "Piece.SetPriority")
 }
 
-// SetPriorityNow sets the piece's priority to PiecePriorityNow and always
-// broadcasts an immediate request-state re-evaluation to every eligible
-// connected peer, even when the piece was already pending at a lower
-// priority. Plain SetPriority only updates peer requests when
-// updatePiecePriorityNoRequests reports a change (typically a not-pending
-// -> pending transition via updatePendingPieces). A routine readahead hint
-// commonly makes a piece pending well before a live playback read escalates
-// it to Now, so that escalation is silent under SetPriority, and the
-// speed-based steal override in applyRequestState (scoped to
-// PiecePriorityNow requests) then only gets evaluated whenever some other
-// peer's own scheduling loop next happens to run on its own -- not
-// guaranteed to happen within a real player's sub-second abort budget. Use
-// this instead of SetPriority(PiecePriorityNow) for a genuine "needed right
-// now" read.
+// SetPriorityNow sets PiecePriorityNow and always updates peer requests, even if the piece
+// was already pending (unlike SetPriority, which only triggers on pending-set changes).
 func (p Piece) SetPriorityNow() {
 	p.t.cl.lock()
 	defer p.t.cl.unlock()

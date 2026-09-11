@@ -39,11 +39,7 @@ type Callbacks struct {
 	// for logging or to action on.
 	StatusUpdated []func(StatusUpdatedEvent)
 
-	// Called whenever the speed-based steal override (applyRequestState, scoped to
-	// PiecePriorityNow requests) actually reassigns a request from a slow/stalled peer to a
-	// faster one. The plain count-based "don't steal from the poor" fairness check never
-	// triggers this. Diagnostic only: lets a caller log which now-priority pieces actually got
-	// rescued by the override versus which had no eligible faster peer to steal from at all.
+	// Fired when a PiecePriorityNow request is stolen via the speed-based override.
 	NowPriorityStealBySpeed []func(NowPriorityStealEvent)
 }
 

@@ -417,21 +417,9 @@ func (p *PeerConn) applyRequestState(next desiredRequestState) {
 			// Steal a request that leaves us with one more request than the existing peer
 			// connection if the stealer more recently received a chunk.
 			allowSteal := diff <= 1 && (diff < 1 || p.lastUsefulChunkReceived.After(existing.lastUsefulChunkReceived))
+			// For PiecePriorityNow only, also steal from a stalled or much slower holder.
+			// Use downloadRate (not DownloadRate) — we already hold the Client lock.
 			if !allowSteal && t.pieceIsNowPriority(req) {
-				// Speed-based override, scoped to pieces needed for immediate
-				// playback (PiecePriorityNow) only: the count-based check above
-				// treats two peers with equal queue depth as equally good, but
-				// says nothing about whether the existing holder is actually
-				// delivering. A meaningfully faster (or stalled) alternative
-				// peer should be allowed to take over a now-priority piece even
-				// when queue depths are tied, matching the speed comparison
-				// (otherSpeed < speed) the reference torrent-stream engine uses
-				// for its stealing decisions.
-				//
-				// Use the non-locking downloadRate: applyRequestState already
-				// runs under the Client lock, and Peer.DownloadRate (exported)
-				// takes p.locker().RLock() itself, which deadlocks by
-				// re-entering the same non-reentrant RWMutex on this goroutine.
 				stealerRate, existingRate := p.downloadRate(), existing.downloadRate()
 				allowSteal = stealAllowedBySpeed(
 					stealerRate, existingRate,
@@ -503,31 +491,18 @@ const (
 	enableUpdateRequestsTimer   = false
 )
 
-// stealSpeedFactor and stealSpeedStallThreshold tune the speed-based steal
-// override in applyRequestState: a peer must be downloading at more than
-// stealSpeedFactor times the current holder's rate (or the holder must have
-// gone quiet for stealSpeedStallThreshold) before it can steal a now-priority
-// piece the count-based fairness check alone would have left in place.
+// Speed-based steal for PiecePriorityNow: >stealSpeedFactor faster, or holder quiet.
 const (
 	stealSpeedFactor         = 1.5
 	stealSpeedStallThreshold = 2 * time.Second
 )
 
-// pieceIsNowPriority reports whether req belongs to a piece the client needs
-// immediately (e.g. for HLS playback at the current read position), as
-// opposed to background/readahead pieces where the existing count-based
-// stealing fairness should apply unchanged.
 func (t *Torrent) pieceIsNowPriority(req RequestIndex) bool {
 	return t.piece(t.pieceIndexOfRequestIndex(req)).purePriority() == PiecePriorityNow
 }
 
-// stealAllowedBySpeed decides the speed-based steal override for a
-// now-priority piece: allow it when the existing holder has gone quiet for
-// stealSpeedStallThreshold, or when the stealing peer's recent download rate
-// exceeds the holder's by more than stealSpeedFactor. A zero existingLast
-// (holder has never delivered anything) counts as quiet, not as "just
-// started," since a silent holder is exactly the case this override exists
-// to unblock.
+// stealAllowedBySpeed reports whether a now-priority request may be stolen by speed/stall.
+// A zero existingLast counts as stalled.
 func stealAllowedBySpeed(stealerRate, existingRate float64, existingLast, now time.Time) bool {
 	stalled := existingLast.IsZero() || now.Sub(existingLast) > stealSpeedStallThreshold
 	fasterEnough := stealerRate > 0 && stealerRate > existingRate*stealSpeedFactor

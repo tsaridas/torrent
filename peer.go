@@ -265,24 +265,11 @@ var (
 	maxLocalToRemoteRequests = (writeBufferHighWaterLen - writeBufferLowWaterLen - interestedMsgLen) / requestMsgLen
 )
 
-// nowPrioritySlowStartBypass is the in-flight request budget granted to a
-// freshly connected/unchoked peer (peakRequests still zero) that has at
-// least one incomplete PiecePriorityNow piece -- i.e. a peer that might hold
-// the piece blocking playback right now. Without this, PeerConn.nominalMaxRequests'
-// ordinary slow start caps such a peer at a single outstanding request until
-// it proves itself over several round trips, racing against callers like
-// the cold-start hotswap watchdog that may drop it as stalled well before
-// it gets the chance to contribute. Scoped to PiecePriorityNow only, same as
-// the speed-based steal override in applyRequestState, so ordinary
-// background/readahead pipeline ramp-up is unaffected.
+// Initial request budget for a fresh peer that has an incomplete PiecePriorityNow piece.
 const nowPrioritySlowStartBypass = 8
 
-// nominalMaxRequestsForPeakRequests is the pure decision behind
-// PeerConn.nominalMaxRequests: the ordinary slow-start cap (peakRequests
-// doubling each round trip, floored at 1), bypassed up to
-// nowPrioritySlowStartBypass while peakRequests is still zero if hasNowPiece
-// reports the peer might hold a piece blocking playback right now. Split out
-// so the arithmetic can be tested without constructing a live Peer/Torrent.
+// nominalMaxRequestsForPeakRequests is the slow-start request cap, optionally bypassed for
+// fresh peers (peakRequests==0) that have a now-priority piece.
 func nominalMaxRequestsForPeakRequests(peerMaxRequests, peakRequests, maxLocalToRemote maxRequests, hasNowPiece bool) maxRequests {
 	base := max(1, min(peerMaxRequests, peakRequests*2, maxLocalToRemote))
 	if peakRequests > 0 || !hasNowPiece {
@@ -291,9 +278,7 @@ func nominalMaxRequestsForPeakRequests(peerMaxRequests, peakRequests, maxLocalTo
 	return max(base, min(peerMaxRequests, nowPrioritySlowStartBypass, maxLocalToRemote))
 }
 
-// hasWantedNowPriorityPiece reports whether this peer has at least one
-// incomplete piece currently at PiecePriorityNow -- a piece blocking
-// playback right now. See nowPrioritySlowStartBypass.
+// hasWantedNowPriorityPiece reports whether the peer has any incomplete reader-Now piece.
 func (cn *Peer) hasWantedNowPriorityPiece() bool {
 	t := cn.t
 	if !t.haveInfo() {

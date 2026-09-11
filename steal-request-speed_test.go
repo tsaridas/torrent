@@ -7,13 +7,6 @@ import (
 	qt "github.com/go-quicktest/qt"
 )
 
-// TestStealAllowedBySpeed exercises the speed-based override that lets a
-// faster (or the existing holder having gone silent) peer steal a
-// PiecePriorityNow piece even when the count-based "don't steal from the
-// poor" check would otherwise leave it in place. This is the Go-server-side
-// analogue of the reference torrent-stream engine's otherSpeed < speed
-// stealing decision, scoped to pieces needed for immediate HLS playback so
-// steady-state background fetching keeps the original fairness behaviour.
 func TestStealAllowedBySpeed(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	for _, c := range []struct {

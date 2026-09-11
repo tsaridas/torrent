@@ -6,14 +6,7 @@ import (
 	qt "github.com/go-quicktest/qt"
 )
 
-// TestNominalMaxRequestsForPeakRequests exercises the request-pipeline
-// slow-start bypass for peers holding a PiecePriorityNow piece: a freshly
-// connected/unchoked peer (peakRequests still zero) that might hold the
-// piece blocking playback right now gets nowPrioritySlowStartBypass
-// in-flight requests immediately instead of the ordinary slow-start floor
-// of 1, while a peer without such a piece, or one that has already proven
-// itself (peakRequests > 0), keeps the original doubling-ramp behaviour
-// unchanged.
+// Tests the PiecePriorityNow slow-start bypass in nominalMaxRequestsForPeakRequests.
 func TestNominalMaxRequestsForPeakRequests(t *testing.T) {
 	for _, c := range []struct {
 		name                                            string
