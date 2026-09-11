@@ -50,8 +50,8 @@ type Callbacks struct {
 type NowPriorityStealEvent struct {
 	Torrent      *Torrent
 	Piece        int
-	Stealer      *Peer
-	Existing     *Peer
+	Stealer      *PeerConn
+	Existing     *PeerConn
 	StealerRate  float64
 	ExistingRate float64
 }
