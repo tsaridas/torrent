@@ -196,6 +196,20 @@ type ClientConfig struct {
 	DialRateLimiter *rate.Limiter
 
 	PieceHashersPerTorrent int // default: 2
+
+	// NowPriorityStealSpeedFactor allows stealing a PiecePriorityNow request the count-based
+	// check would deny when the stealer's download rate exceeds the holder's by more than this
+	// factor. Values <= 1 disable the speed half of the override. See also
+	// NowPriorityStealStallThreshold. NewDefaultClientConfig leaves this at 0 (disabled).
+	NowPriorityStealSpeedFactor float64
+	// NowPriorityStealStallThreshold allows stealing a PiecePriorityNow request when the holder
+	// has not delivered a useful chunk for this long. Zero or negative disables the stall half
+	// of the override.
+	NowPriorityStealStallThreshold time.Duration
+	// NowPrioritySlowStartRequests is the initial outstanding-request budget for a fresh peer
+	// (peakRequests still 0) that has an incomplete PiecePriorityNow piece. Zero or negative
+	// keeps the ordinary slow-start floor of 1.
+	NowPrioritySlowStartRequests maxRequests
 }
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {

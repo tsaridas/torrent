@@ -349,13 +349,15 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 				// runs under the Client lock, and Peer.DownloadRate (exported)
 				// takes p.locker().RLock() itself, which deadlocks by
 				// re-entering the same non-reentrant RWMutex on this goroutine.
+				cfg := t.cl.config
 				stealerRate, existingRate := p.downloadRate(), existing.downloadRate()
 				allowSteal = stealAllowedBySpeed(
 					stealerRate, existingRate,
 					existing.lastUsefulChunkReceived, time.Now(),
+					cfg.NowPriorityStealSpeedFactor, cfg.NowPriorityStealStallThreshold,
 				)
 				if allowSteal {
-					for _, f := range t.cl.config.Callbacks.NowPriorityStealBySpeed {
+					for _, f := range cfg.Callbacks.NowPriorityStealBySpeed {
 						f(NowPriorityStealEvent{
 							Torrent:      t,
 							Piece:        t.pieceIndexOfRequestIndex(req),
@@ -404,16 +406,6 @@ const (
 	enableUpdateRequestsTimer   = false
 )
 
-// stealSpeedFactor and stealSpeedStallThreshold tune the speed-based steal
-// override in applyRequestState: a peer must be downloading at more than
-// stealSpeedFactor times the current holder's rate (or the holder must have
-// gone quiet for stealSpeedStallThreshold) before it can steal a now-priority
-// piece the count-based fairness check alone would have left in place.
-const (
-	stealSpeedFactor         = 1.5
-	stealSpeedStallThreshold = 2 * time.Second
-)
-
 // pieceIsNowPriority reports whether req belongs to a piece the client needs
 // immediately (e.g. for HLS playback at the current read position), as
 // opposed to background/readahead pieces where the existing count-based
@@ -424,13 +416,18 @@ func (t *Torrent) pieceIsNowPriority(req RequestIndex) bool {
 
 // stealAllowedBySpeed decides the speed-based steal override for a
 // now-priority piece: allow it when the existing holder has gone quiet for
-// stealSpeedStallThreshold, or when the stealing peer's recent download rate
-// exceeds the holder's by more than stealSpeedFactor. A zero existingLast
-// (holder has never delivered anything) counts as quiet, not as "just
-// started," since a silent holder is exactly the case this override exists
-// to unblock.
-func stealAllowedBySpeed(stealerRate, existingRate float64, existingLast, now time.Time) bool {
-	stalled := existingLast.IsZero() || now.Sub(existingLast) > stealSpeedStallThreshold
-	fasterEnough := stealerRate > 0 && stealerRate > existingRate*stealSpeedFactor
+// stall, or when the stealing peer's recent download rate exceeds the
+// holder's by more than factor. A zero existingLast (holder has never
+// delivered anything) counts as quiet, not as "just started," since a silent
+// holder is exactly the case this override exists to unblock. factor <= 1
+// disables the speed check; stall <= 0 disables the quiet-holder check.
+func stealAllowedBySpeed(
+	stealerRate, existingRate float64,
+	existingLast, now time.Time,
+	factor float64,
+	stall time.Duration,
+) bool {
+	stalled := stall > 0 && (existingLast.IsZero() || now.Sub(existingLast) > stall)
+	fasterEnough := factor > 1 && stealerRate > 0 && stealerRate > existingRate*factor
 	return stalled || fasterEnough
 }

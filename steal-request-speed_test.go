@@ -7,21 +7,18 @@ import (
 	qt "github.com/go-quicktest/qt"
 )
 
-// TestStealAllowedBySpeed exercises the speed-based override that lets a
-// faster (or the existing holder having gone silent) peer steal a
-// PiecePriorityNow piece even when the count-based "don't steal from the
-// poor" check would otherwise leave it in place. This is the Go-server-side
-// analogue of the reference torrent-stream engine's otherSpeed < speed
-// stealing decision, scoped to pieces needed for immediate HLS playback so
-// steady-state background fetching keeps the original fairness behaviour.
 func TestStealAllowedBySpeed(t *testing.T) {
 	t0 := time.Unix(1000, 0)
+	factor := DefaultNowPriorityStealSpeedFactor
+	stall := DefaultNowPriorityStealStallThreshold
 	for _, c := range []struct {
 		name         string
 		stealerRate  float64
 		existingRate float64
 		existingLast time.Time
 		now          time.Time
+		factor       float64
+		stall        time.Duration
 		want         bool
 	}{
 		{
@@ -30,6 +27,8 @@ func TestStealAllowedBySpeed(t *testing.T) {
 			existingRate: 100,
 			existingLast: t0,
 			now:          t0.Add(time.Second),
+			factor:       factor,
+			stall:        stall,
 			want:         false,
 		},
 		{
@@ -38,6 +37,8 @@ func TestStealAllowedBySpeed(t *testing.T) {
 			existingRate: 100,
 			existingLast: t0,
 			now:          t0.Add(time.Second),
+			factor:       factor,
+			stall:        stall,
 			want:         true,
 		},
 		{
@@ -46,30 +47,38 @@ func TestStealAllowedBySpeed(t *testing.T) {
 			existingRate: 100,
 			existingLast: t0,
 			now:          t0.Add(time.Second),
+			factor:       factor,
+			stall:        stall,
 			want:         false,
 		},
 		{
-			name:         "silent-so-far holder (zero last-useful) is stealable regardless of rate",
+			name:         "silent-so-far holder is stealable regardless of rate",
 			stealerRate:  10,
 			existingRate: 10,
 			existingLast: time.Time{},
 			now:          t0,
+			factor:       factor,
+			stall:        stall,
 			want:         true,
 		},
 		{
-			name:         "holder gone quiet past the stall threshold is stealable even if it was once fast",
+			name:         "holder past stall threshold is stealable even if it was once fast",
 			stealerRate:  10,
 			existingRate: 1000,
 			existingLast: t0,
-			now:          t0.Add(stealSpeedStallThreshold + time.Millisecond),
+			now:          t0.Add(stall + time.Millisecond),
+			factor:       factor,
+			stall:        stall,
 			want:         true,
 		},
 		{
-			name:         "holder still within the stall threshold is not stolen from on rate alone",
+			name:         "holder still within stall threshold is not stolen from on rate alone",
 			stealerRate:  10,
 			existingRate: 1000,
 			existingLast: t0,
-			now:          t0.Add(stealSpeedStallThreshold - time.Millisecond),
+			now:          t0.Add(stall - time.Millisecond),
+			factor:       factor,
+			stall:        stall,
 			want:         false,
 		},
 		{
@@ -78,11 +87,33 @@ func TestStealAllowedBySpeed(t *testing.T) {
 			existingRate: 0,
 			existingLast: t0,
 			now:          t0.Add(time.Millisecond),
+			factor:       factor,
+			stall:        stall,
+			want:         false,
+		},
+		{
+			name:         "factor <= 1 disables the speed check",
+			stealerRate:  1000,
+			existingRate: 1,
+			existingLast: t0,
+			now:          t0.Add(time.Millisecond),
+			factor:       1,
+			stall:        stall,
+			want:         false,
+		},
+		{
+			name:         "stall <= 0 disables the quiet-holder check",
+			stealerRate:  10,
+			existingRate: 10,
+			existingLast: time.Time{},
+			now:          t0,
+			factor:       factor,
+			stall:        0,
 			want:         false,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := stealAllowedBySpeed(c.stealerRate, c.existingRate, c.existingLast, c.now)
+			got := stealAllowedBySpeed(c.stealerRate, c.existingRate, c.existingLast, c.now, c.factor, c.stall)
 			qt.Check(t, qt.Equals(got, c.want))
 		})
 	}
