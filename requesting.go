@@ -353,7 +353,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 				stealerRate, existingRate := p.downloadRate(), existing.downloadRate()
 				allowSteal = stealAllowedBySpeed(
 					stealerRate, existingRate,
-					existing.lastUsefulChunkReceived, time.Now(),
+					p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived, time.Now(),
 					cfg.NowPriorityStealSpeedFactor, cfg.NowPriorityStealStallThreshold,
 				)
 				if allowSteal {
@@ -442,13 +442,41 @@ func (t *Torrent) pieceIsNowPriority(req RequestIndex) bool {
 // delivered anything) counts as quiet, not as "just started," since a silent
 // holder is exactly the case this override exists to unblock. factor <= 1
 // disables the speed check; stall <= 0 disables the quiet-holder check.
+//
+// The quiet-holder branch additionally requires the stealer to have *earned*
+// the block, via stealerBetter. Without that check the branch fires for every
+// pair of peers at connection time -- neither has delivered a chunk yet, so
+// both look quiet -- and a head piece is handed round a carousel of equally
+// unproven peers, each holding it for one StealRequestGrace before the next
+// takes it. Observed in production: one piece passed to five distinct peers
+// inside a single second, every one of them at 0 B/s, with the peer that had
+// just stolen it appearing as the victim of the next steal. The intent above
+// is preserved -- a silent holder is still displaced -- but only by a peer
+// that is actually delivering.
 func stealAllowedBySpeed(
 	stealerRate, existingRate float64,
-	existingLast, now time.Time,
+	stealerLast, existingLast, now time.Time,
 	factor float64,
 	stall time.Duration,
 ) bool {
-	stalled := stall > 0 && (existingLast.IsZero() || now.Sub(existingLast) > stall)
+	stalled := stall > 0 &&
+		(existingLast.IsZero() || now.Sub(existingLast) > stall) &&
+		stealerBetter(stealerRate, existingRate, stealerLast, existingLast)
 	fasterEnough := factor > 1 && stealerRate > 0 && stealerRate > existingRate*factor
 	return stalled || fasterEnough
+}
+
+// stealerBetter reports whether the stealing peer has shown more recent or
+// faster delivery than the holder. Either signal is enough: a peer with a
+// higher measured rate, or one that delivered a useful chunk more recently.
+// Two peers that have both delivered nothing satisfy neither, which is what
+// breaks the cold-start carousel.
+func stealerBetter(stealerRate, existingRate float64, stealerLast, existingLast time.Time) bool {
+	if stealerRate > existingRate {
+		return true
+	}
+	if stealerLast.IsZero() {
+		return false
+	}
+	return existingLast.IsZero() || stealerLast.After(existingLast)
 }
