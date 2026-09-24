@@ -34,7 +34,7 @@ require (
 	github.com/frankban/quicktest v1.14.6
 	github.com/fsnotify/fsnotify v1.5.4
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916
-	github.com/go-quicktest/qt v1.101.0
+	github.com/go-quicktest/qt v1.102.0
 	github.com/google/btree v1.1.2
 	github.com/google/go-cmp v0.6.0
 	github.com/gorilla/websocket v1.5.0
@@ -53,19 +53,18 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.11.1
 	go.opentelemetry.io/otel/sdk v1.11.1
 	go.opentelemetry.io/otel/trace v1.11.1
+	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.26.0
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
 )
 
 require (
-	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/alexflint/go-scalar v1.1.0 // indirect
 	github.com/anacrolix/backtrace v0.0.0-20221205112523-22a61db8f82e // indirect
 	github.com/anacrolix/missinggo/perf v1.0.0 // indirect
 	github.com/anacrolix/mmsg v1.0.1 // indirect
-	github.com/anacrolix/stm v0.4.0 // indirect
-	github.com/benbjohnson/immutable v0.3.0 // indirect
+	github.com/benbjohnson/immutable v0.4.1-0.20221220213129-8932b999621d // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.2.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.1.3 // indirect
@@ -109,7 +108,7 @@ require (
 	github.com/prometheus/common v0.35.0 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rogpeppe/go-internal v1.11.0 // indirect
+	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	github.com/sethvargo/go-envconfig v0.8.2 // indirect
@@ -136,11 +135,12 @@ require (
 	go.uber.org/atomic v1.10.0 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
 	golang.org/x/crypto v0.28.0 // indirect
-	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/net v0.29.0 // indirect
 	golang.org/x/text v0.19.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
-	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
+	google.golang.org/genproto v0.0.0-20230530153820-e85fd2cbaebc // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20230526203410-71b5a4ffd15e // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20230526203410-71b5a4ffd15e // indirect
 	google.golang.org/grpc v1.56.3 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
@@ -160,3 +160,15 @@ retract (
 	// Indefinite outgoing requests on storage write errors. https://github.com/anacrolix/torrent/issues/889
 	[v1.29.0, v1.53.2]
 )
+
+// Not stock anacrolix/dht: github.com/tsaridas/dht on the `traversal` line,
+// which adds ServerConfig.Alpha/K (get_peers + bootstrap traversal
+// concurrency; upstream hardcodes the traversal default of 3). The /v2 suffix
+// on the replacement path is required because the fork keeps the upstream
+// module path github.com/anacrolix/dht/v2, and Go rejects a v0 pseudo-version
+// for a post-v0 module path.
+//
+// Note this replace only affects builds of THIS module. A replace in a
+// dependency is ignored, so any main module consuming this fork needs its own
+// (stremio-server-golang has one).
+replace github.com/anacrolix/dht/v2 => github.com/tsaridas/dht/v2 v2.24.1-0.20260924052350-4d361716dfd2
