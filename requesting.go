@@ -356,6 +356,16 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 					p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived, time.Now(),
 					cfg.NowPriorityStealSpeedFactor, cfg.NowPriorityStealStallThreshold,
 				)
+				if !allowSteal {
+					// Neither rate-based test can see a request parked behind a
+					// busy holder's queue; the deadline can. See
+					// nowPriorityRequestOverdue.
+					allowSteal = nowPriorityRequestOverdue(
+						time.Since(t.requestState[req].when),
+						cfg.NowPriorityRequestDeadline,
+						stealerRate,
+					)
+				}
 				if allowSteal {
 					for _, f := range cfg.Callbacks.NowPriorityStealBySpeed {
 						f(NowPriorityStealEvent{
@@ -453,6 +463,34 @@ func (t *Torrent) pieceIsNowPriority(req RequestIndex) bool {
 // just stolen it appearing as the victim of the next steal. The intent above
 // is preserved -- a silent holder is still displaced -- but only by a peer
 // that is actually delivering.
+// nowPriorityRequestOverdue decides the deadline steal override for a
+// now-priority piece: allow it when the request has been outstanding with its
+// current holder for longer than deadline and the stealing peer is actually
+// delivering right now.
+//
+// The speed and stall overrides both read Peer.lastUsefulChunkReceived, which
+// is a per-peer clock. A holder that keeps delivering other pieces refreshes
+// it continuously, so it never registers as stalled and -- if its overall rate
+// is respectable -- never registers as slow either, while the one block that
+// playback is waiting on sits behind its request queue. Measured on n200: a
+// cold probe read took 30.8s to get 2 MiB, with a single steal at t=1s and
+// nothing after, and the very next read on the same torrent pulled 7.86 MB in
+// 993ms. The swarm was fine; one request was parked.
+//
+// age is measured from requestState.when, which PeerConn.request rewrites on
+// every issue, so it is the age with the *current* holder rather than the
+// request's total lifetime. That bounds churn: a block can change hands at
+// most once per deadline, which is an order of magnitude longer than
+// StealRequestGrace.
+//
+// Requiring stealerRate > 0 is what keeps this from re-creating the cold-start
+// carousel described on stealAllowedBySpeed: at connection time every peer is
+// silent, and handing a block between silent peers makes no progress. A peer
+// that is measurably delivering has earned the block.
+func nowPriorityRequestOverdue(age, deadline time.Duration, stealerRate float64) bool {
+	return deadline > 0 && age > deadline && stealerRate > 0
+}
+
 func stealAllowedBySpeed(
 	stealerRate, existingRate float64,
 	stealerLast, existingLast, now time.Time,

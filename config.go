@@ -230,6 +230,17 @@ type ClientConfig struct {
 	// (peakRequests still 0) that has an incomplete PiecePriorityNow piece. Zero or negative
 	// keeps the ordinary slow-start floor of 1.
 	NowPrioritySlowStartRequests maxRequests
+	// NowPriorityRequestDeadline allows stealing a PiecePriorityNow request that has been
+	// outstanding with its current holder for this long, from any peer that is currently
+	// delivering. Zero or negative disables the deadline override.
+	//
+	// The speed and stall overrides above both key off Peer.lastUsefulChunkReceived, which is
+	// per-peer, not per-request: a holder that keeps delivering other pieces never looks
+	// stalled and never looks slow, even while one now-priority block sits unanswered behind
+	// its queue. That is the case this deadline covers, and it is the shape libtorrent's
+	// request_time_critical_pieces uses -- a piece blocking playback gets a deadline, and
+	// missing it moves the request rather than waiting on the holder indefinitely.
+	NowPriorityRequestDeadline time.Duration
 }
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {

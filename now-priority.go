@@ -9,6 +9,7 @@ const (
 	DefaultNowPriorityStealSpeedFactor    = 1.5
 	DefaultNowPriorityStealStallThreshold = 2 * time.Second
 	DefaultNowPrioritySlowStartRequests   = 8
+	DefaultNowPriorityRequestDeadline     = 2 * time.Second
 )
 
 // SetNowPriorityRequestDefaults enables the recommended PiecePriorityNow steal
@@ -17,4 +18,5 @@ func (cc *ClientConfig) SetNowPriorityRequestDefaults() {
 	cc.NowPriorityStealSpeedFactor = DefaultNowPriorityStealSpeedFactor
 	cc.NowPriorityStealStallThreshold = DefaultNowPriorityStealStallThreshold
 	cc.NowPrioritySlowStartRequests = DefaultNowPrioritySlowStartRequests
+	cc.NowPriorityRequestDeadline = DefaultNowPriorityRequestDeadline
 }
