@@ -76,6 +76,11 @@ type (
 		// and implementation differences, we may receive chunks that are no longer in the set of
 		// requests actually want. This could use a roaring.BSI if the memory use becomes noticeable.
 		validReceiveChunks map[RequestIndex]int
+		// shadowRequests are duplicate requests sent by ShadowRequestAhead:
+		// on the wire and counted in validReceiveChunks, but not in
+		// requestState, so the tracked holder keeps its request. See
+		// shadow-request.go.
+		shadowRequests map[RequestIndex]struct{}
 		// Indexed by metadata piece, set to true if posted and pending a
 		// response.
 		metadataRequests []bool
@@ -618,6 +623,14 @@ func runSafeExtraneous(f func()) {
 
 // Returns true if it was valid to reject the request.
 func (c *Peer) remoteRejectedRequest(r RequestIndex) bool {
+	// A rejected shadow request is expected (the peer may have choked us, or
+	// already sent the block), not a protocol violation: an invalid reject
+	// ends the connection.
+	if _, ok := c.shadowRequests[r]; ok {
+		delete(c.shadowRequests, r)
+		c.decExpectedChunkReceive(r)
+		return true
+	}
 	if c.deleteRequest(r) {
 		c.decPeakRequests()
 	} else if !c.requestState.Cancelled.CheckedRemove(r) {
@@ -675,6 +688,10 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 		return errors.New("received unexpected chunk")
 	}
 	c.decExpectedChunkReceive(req)
+	if _, ok := c.shadowRequests[req]; ok {
+		delete(c.shadowRequests, req)
+		ChunksReceived.Add("shadow", 1)
+	}
 
 	if c.peerChoking && c.peerAllowedFast.Contains(pieceIndex(ppReq.Index)) {
 		ChunksReceived.Add("due to allowed fast", 1)
