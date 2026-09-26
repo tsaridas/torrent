@@ -39,7 +39,7 @@ func TestNowPriorityRequestOverdue(t *testing.T) {
 		{"disabled by negative deadline", time.Hour, -1, fresh, 2, 40, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := nowPriorityRequestOverdue(c.age, c.deadline, c.stealerLast, now, c.stealerQueue, c.holderQueue)
+			got := nowPriorityRequestOverdue(c.age, c.deadline, c.stealerLast, now.Add(-10*time.Millisecond), now, c.stealerQueue, c.holderQueue)
 			if got != c.want {
 				t.Fatalf("got %v, want %v", got, c.want)
 			}
@@ -62,7 +62,7 @@ func TestDeadlineCoversWhatSpeedAndStallMiss(t *testing.T) {
 	) {
 		t.Fatal("precondition: speed/stall must NOT allow this steal")
 	}
-	if !nowPriorityRequestOverdue(30*time.Second, DefaultNowPriorityRequestDeadline, stealerLast, now, 4, 64) {
+	if !nowPriorityRequestOverdue(30*time.Second, DefaultNowPriorityRequestDeadline, stealerLast, busyHolder, now, 4, 64) {
 		t.Fatal("deadline must allow a request parked for 30s")
 	}
 }

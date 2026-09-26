@@ -414,7 +414,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 					allowSteal = nowPriorityRequestOverdue(
 						time.Since(t.requestState[req].when),
 						cfg.NowPriorityRequestDeadline,
-						p.lastUsefulChunkReceived, time.Now(),
+						p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived, time.Now(),
 						int64(current.Requests.GetCardinality()),
 						int64(existing.uncancelledRequests()),
 					)
@@ -554,8 +554,9 @@ const nowPriorityRecentDelivery = time.Second
 // nowPriorityRequestOverdue decides the deadline steal override for a
 // now-priority piece: allow it when the request has been outstanding with its
 // current holder for longer than deadline, the stealing peer delivered a
-// useful chunk within nowPriorityRecentDelivery, and the stealer's queue is
-// shallower than the holder's.
+// useful chunk within nowPriorityRecentDelivery, and either the holder has
+// delivered nothing for a whole deadline or the stealer's queue is shallower
+// than the holder's.
 //
 // The speed and stall overrides both read Peer.lastUsefulChunkReceived as a
 // property of the *holder*. A holder that keeps delivering other pieces
@@ -581,7 +582,7 @@ const nowPriorityRecentDelivery = time.Second
 // override bypasses: moving the block behind a deeper queue would not help.
 func nowPriorityRequestOverdue(
 	age, deadline time.Duration,
-	stealerLast, now time.Time,
+	stealerLast, holderLast, now time.Time,
 	stealerQueue, holderQueue int64,
 ) bool {
 	if deadline <= 0 || age <= deadline {
@@ -589,6 +590,17 @@ func nowPriorityRequestOverdue(
 	}
 	if stealerLast.IsZero() || now.Sub(stealerLast) > nowPriorityRecentDelivery {
 		return false
+	}
+	// A holder that has delivered nothing for a whole deadline is not a
+	// queue to compare against -- its depth says nothing about when the
+	// block will arrive. This is also the common cold-start case: a peer
+	// held to a couple of now-priority requests (NowPriorityRestrictedPeer
+	// Requests) always has the shallower queue, so the comparison alone
+	// would never let a proven peer take its block. Measured on n200: piece
+	// 0 blocks sat with 0 B/s holders for ~3s while fast peers were
+	// delivering other pieces.
+	if holderLast.IsZero() || now.Sub(holderLast) > deadline {
+		return true
 	}
 	return stealerQueue < holderQueue
 }
