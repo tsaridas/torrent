@@ -19,9 +19,11 @@ package torrent
 // recoverable (a probe result), never for bytes delivered as media.
 //
 // dirtyChunks is set before a chunk is written (receiveChunk unpends it first
-// so it is not requested twice), so "dirty" alone does not mean on disk. A
-// piece's pendingWrites counts writes in flight, so dirty AND pendingWrites ==
-// 0 does: every dirty chunk of that piece has been written.
+// so it is not requested twice), so "dirty" alone does not mean on disk;
+// writtenChunks is set once the write completes. An earlier version used
+// "dirty and the piece has no writes in flight", which read 0 whenever any
+// other chunk of the piece was mid-write -- constantly, on an active piece --
+// so availability flapped and readers stalled.
 func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 	if off < 0 || max <= 0 {
 		return 0
@@ -48,14 +50,8 @@ func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 			continue
 		}
 		p := t.piece(pi)
-		p.pendingWritesMutex.Lock()
-		writing := p.pendingWrites != 0
-		p.pendingWritesMutex.Unlock()
-		if writing {
-			break
-		}
 		ci := chunkIndexType((pos - pieceStart) / chunkSize)
-		if !p.chunkIndexDirty(ci) {
+		if !p.chunkIndexWritten(ci) {
 			break
 		}
 		chunkEnd := pieceStart + (int64(ci)+1)*chunkSize

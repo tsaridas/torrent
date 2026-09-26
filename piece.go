@@ -104,6 +104,7 @@ func (p *Piece) unpendChunkIndex(i chunkIndexType) {
 
 func (p *Piece) pendChunkIndex(i RequestIndex) {
 	p.t.dirtyChunks.Remove(p.requestIndexOffset() + i)
+	p.t.writtenChunks.Remove(p.requestIndexOffset() + i)
 	p.t.updatePieceRequestOrderPiece(p.index)
 }
 
@@ -139,6 +140,11 @@ func (p *Piece) waitNoPendingWrites() {
 
 func (p *Piece) chunkIndexDirty(chunk chunkIndexType) bool {
 	return p.t.dirtyChunks.Contains(p.requestIndexOffset() + chunk)
+}
+
+// chunkIndexWritten reports whether a received chunk's bytes are on disk.
+func (p *Piece) chunkIndexWritten(chunk chunkIndexType) bool {
+	return p.t.writtenChunks.Contains(p.requestIndexOffset() + chunk)
 }
 
 func (p *Piece) chunkIndexSpec(chunk chunkIndexType) ChunkSpec {

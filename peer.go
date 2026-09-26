@@ -807,6 +807,12 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 		return nil
 	}
 
+	// The chunk is on disk now. Only if it is still dirty: a hash failure
+	// while the write was in flight re-pends it, and the bytes are stale.
+	if ci := chunkIndexFromChunkSpec(ppReq.ChunkSpec, t.chunkSize); piece.chunkIndexDirty(ci) {
+		t.writtenChunks.Add(req)
+	}
+
 	c.onDirtiedPiece(pieceIndex(ppReq.Index))
 
 	// We need to ensure the piece is only queued once, so only the last chunk writer gets this job.

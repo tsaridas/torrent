@@ -159,6 +159,11 @@ type Torrent struct {
 	requestState map[RequestIndex]requestState
 	// Chunks we've written to since the corresponding piece was last checked.
 	dirtyChunks typedRoaring.Bitmap[RequestIndex]
+	// writtenChunks are dirty chunks whose write to storage has completed.
+	// dirtyChunks is set before the write (so a chunk is not requested
+	// twice), so it cannot say whether the bytes are on disk yet; see
+	// ReadableUnverifiedLen. Cleared wherever dirtyChunks is.
+	writtenChunks typedRoaring.Bitmap[RequestIndex]
 
 	pex pexState
 
@@ -1107,6 +1112,9 @@ func (t *Torrent) numChunks() RequestIndex {
 
 func (t *Torrent) pendAllChunkSpecs(pieceIndex pieceIndex) {
 	t.dirtyChunks.RemoveRange(
+		uint64(t.pieceRequestIndexOffset(pieceIndex)),
+		uint64(t.pieceRequestIndexOffset(pieceIndex+1)))
+	t.writtenChunks.RemoveRange(
 		uint64(t.pieceRequestIndexOffset(pieceIndex)),
 		uint64(t.pieceRequestIndexOffset(pieceIndex+1)))
 }
