@@ -26,7 +26,10 @@ type Piece struct {
 
 	readerCond chansync.BroadcastCond
 
-	numVerifies         int64
+	numVerifies int64
+	// hashFailures counts failed hash checks of this piece; see
+	// Torrent.PieceHashFailures.
+	hashFailures        int64
 	hashing             bool
 	marking             bool
 	storageCompletionOk bool

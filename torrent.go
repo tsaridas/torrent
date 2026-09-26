@@ -2372,6 +2372,9 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 	})
 	p := t.piece(piece)
 	p.numVerifies++
+	if !passed {
+		p.hashFailures++
+	}
 	t.cl.event.Broadcast()
 	if t.closed.IsSet() {
 		return

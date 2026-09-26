@@ -69,3 +69,16 @@ func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 	}
 	return n
 }
+
+// PieceHashFailures returns how many times piece i has failed its hash check.
+// A caller that consumed unverified bytes (ReadableUnverifiedLen) snapshots
+// this when it reads and compares later: an increase means the bytes it used
+// were bad and whatever it derived from them must be discarded.
+func (t *Torrent) PieceHashFailures(i int) int64 {
+	t.cl.rLock()
+	defer t.cl.rUnlock()
+	if !t.haveInfo() || i < 0 || i >= t.numPieces() {
+		return 0
+	}
+	return t.piece(i).hashFailures
+}
