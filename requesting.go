@@ -303,8 +303,30 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 	// ClientConfig.NowPriorityRestrictedPeerRequests. nowHeld counts the ones
 	// it already has so the cap spans update passes.
 	nowLimit := t.cl.config.NowPriorityRestrictedPeerRequests
-	restricted := nowLimit > 0 && peerRestrictedForNowPriority(
-		p.downloadRate(), t.cl.config.NowPrioritySlowPeerRate)
+	slowRate := t.cl.config.NowPrioritySlowPeerRate
+	myRate := p.downloadRate()
+	restricted := nowLimit > 0 && peerRestrictedForNowPriority(myRate, slowRate)
+	// A proven-but-slow peer is kept off a piece only while a faster peer
+	// holds it, cached per piece for this pass. An untested peer is always
+	// restricted: it still gets nowLimit requests, and delivering them is
+	// what makes it proven.
+	betterHolder := map[pieceIndex]bool{}
+	restrictedFor := func(piece pieceIndex) bool {
+		if myRate <= 0 {
+			return true
+		}
+		v, ok := betterHolder[piece]
+		if !ok {
+			t.iterPeers(func(q *Peer) {
+				if v || q == p || q.peerChoking || !q.peerHasPiece(piece) {
+					return
+				}
+				v = fasterHolderAvailable(myRate, q.downloadRate(), slowRate)
+			})
+			betterHolder[piece] = v
+		}
+		return v
+	}
 	nowHeld := 0
 	if restricted {
 		current.Requests.Iterate(func(r RequestIndex) bool {
@@ -339,7 +361,8 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		// Skipping here sends the restricted peer on to the next, lower
 		// priority request in the heap -- torrent-stream's "go elsewhere".
 		countsTowardNow := false
-		if restricted && existing != p && t.pieceIsNowPriority(req) {
+		if restricted && existing != p && t.pieceIsNowPriority(req) &&
+			restrictedFor(t.pieceIndexOfRequestIndex(req)) {
 			if nowHeld >= nowLimit {
 				torrent.Add(nowPriorityRestrictedSkipsVar, 1)
 				continue
@@ -572,6 +595,16 @@ func nowPriorityRequestOverdue(
 // for a peer that has delivered nothing, so an untested peer is always
 // restricted; a proven one is restricted while it runs below slowRate.
 // slowRate <= 0 restricts only untested peers.
+// fasterHolderAvailable reports whether another peer holding a piece is a
+// better source for it than a slow peer running at myRate: fast enough not to
+// be restricted itself, and faster than myRate. This is torrent-stream's rank
+// test (otherSpeed >= SPEED_THRESHOLD && otherSpeed > speed). Without it a
+// sole slow seeder would be throttled to NowPriorityRestrictedPeerRequests
+// with nobody to take up the slack.
+func fasterHolderAvailable(myRate, otherRate, slowRate float64) bool {
+	return otherRate >= slowRate && otherRate > myRate
+}
+
 // nowPriorityRestrictedSkipsVar is the expvar key (in the "torrent" map)
 // counting now-priority requests a restricted peer was steered away from.
 const nowPriorityRestrictedSkipsVar = "now-priority restricted skips"

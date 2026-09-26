@@ -242,9 +242,11 @@ type ClientConfig struct {
 	// missing it moves the request rather than waiting on the holder indefinitely.
 	NowPriorityRequestDeadline time.Duration
 	// NowPriorityRestrictedPeerRequests caps how many PiecePriorityNow requests a restricted
-	// peer -- one whose download rate is below NowPrioritySlowPeerRate, which includes every
-	// peer that has not delivered anything yet -- may hold at once. The rest of its request
-	// budget goes to lower-priority pieces. Zero or negative disables the restriction.
+	// peer may hold at once; the rest of its request budget goes to lower-priority pieces. A
+	// peer that has delivered nothing is always restricted. A proven peer whose download rate
+	// is below NowPrioritySlowPeerRate is restricted on a piece only while another unchoking
+	// peer holding that piece is faster and not slow itself -- a sole slow seeder is never
+	// throttled. Zero or negative disables the restriction.
 	//
 	// This is how the reference torrent-stream engine keeps the head of the stream off peers
 	// it knows nothing about: an untested wire gets one request, aimed at the tail of the

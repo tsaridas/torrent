@@ -38,3 +38,25 @@ func TestSetNowPriorityRequestDefaultsRestriction(t *testing.T) {
 	qt.Check(t, qt.Equals(cc.NowPriorityRestrictedPeerRequests, DefaultNowPriorityRestrictedPeerRequests))
 	qt.Check(t, qt.Equals(cc.NowPrioritySlowPeerRate, float64(DefaultNowPrioritySlowPeerRate)))
 }
+
+// A slow proven peer is only displaced by a better one. The sole-slow-seeder
+// case (TestSlowRealPeerCanExceedPlayerAbortBudget in the server repo) is why:
+// throttling it with no alternative stalls the download outright.
+func TestFasterHolderAvailable(t *testing.T) {
+	const slow = DefaultNowPrioritySlowPeerRate
+	for _, c := range []struct {
+		name          string
+		myRate, other float64
+		want          bool
+	}{
+		{"fast holder beats slow peer", 20_000, 700_000, true},
+		{"other is also slow", 20_000, 30_000, false},
+		{"other is fast enough but slower than me", 60_000, 50_000, false},
+		{"other exactly at threshold and faster", 20_000, slow, true},
+		{"other untested", 20_000, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			qt.Check(t, qt.Equals(fasterHolderAvailable(c.myRate, c.other, slow), c.want))
+		})
+	}
+}
