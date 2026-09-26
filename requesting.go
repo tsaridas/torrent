@@ -306,26 +306,28 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 	slowRate := t.cl.config.NowPrioritySlowPeerRate
 	myRate := p.downloadRate()
 	restricted := nowLimit > 0 && peerRestrictedForNowPriority(myRate, slowRate)
-	// A proven-but-slow peer is kept off a piece only while a faster peer
-	// holds it, cached per piece for this pass. An untested peer is always
-	// restricted: it still gets nowLimit requests, and delivering them is
-	// what makes it proven.
-	betterHolder := map[pieceIndex]bool{}
-	restrictedFor := func(piece pieceIndex) bool {
-		if myRate <= 0 {
-			return true
+	// The per-piece cap for a restricted peer, cached for this pass. It
+	// mirrors torrent-stream's rank test: while a faster, proven peer holds
+	// the piece, a proven slow peer takes none of it (rank returns false and
+	// the wire goes elsewhere) and an untested peer gets its single proving
+	// request. With no better holder, an untested peer gets nowLimit and a
+	// proven slow peer is not restricted at all, so a sole slow seeder keeps
+	// the download moving. See restrictedNowCap.
+	pieceCap := map[pieceIndex]int{}
+	nowCapFor := func(piece pieceIndex) int {
+		if c, ok := pieceCap[piece]; ok {
+			return c
 		}
-		v, ok := betterHolder[piece]
-		if !ok {
-			t.iterPeers(func(q *Peer) {
-				if v || q == p || q.peerChoking || !q.peerHasPiece(piece) {
-					return
-				}
-				v = fasterHolderAvailable(myRate, q.downloadRate(), slowRate)
-			})
-			betterHolder[piece] = v
-		}
-		return v
+		better := false
+		t.iterPeers(func(q *Peer) {
+			if better || q == p || q.peerChoking || !q.peerHasPiece(piece) {
+				return
+			}
+			better = fasterHolderAvailable(myRate, q.downloadRate(), slowRate)
+		})
+		c := restrictedNowCap(better, myRate, nowLimit)
+		pieceCap[piece] = c
+		return c
 	}
 	nowHeld := 0
 	if restricted {
@@ -361,13 +363,14 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		// Skipping here sends the restricted peer on to the next, lower
 		// priority request in the heap -- torrent-stream's "go elsewhere".
 		countsTowardNow := false
-		if restricted && existing != p && t.pieceIsNowPriority(req) &&
-			restrictedFor(t.pieceIndexOfRequestIndex(req)) {
-			if nowHeld >= nowLimit {
-				torrent.Add(nowPriorityRestrictedSkipsVar, 1)
-				continue
+		if restricted && existing != p && t.pieceIsNowPriority(req) {
+			if c := nowCapFor(t.pieceIndexOfRequestIndex(req)); c >= 0 {
+				if nowHeld >= c {
+					torrent.Add(nowPriorityRestrictedSkipsVar, 1)
+					continue
+				}
+				countsTowardNow = true
 			}
-			countsTowardNow = true
 		}
 		if existing != nil && existing != p {
 			// don't steal on cancel - because this is triggered by t.cancelRequest below
@@ -595,6 +598,32 @@ func nowPriorityRequestOverdue(
 // for a peer that has delivered nothing, so an untested peer is always
 // restricted; a proven one is restricted while it runs below slowRate.
 // slowRate <= 0 restricts only untested peers.
+// restrictedNowCap is how many now-priority requests a restricted peer may
+// hold on one piece; -1 means no cap. better reports whether a faster, proven
+// peer holds the piece (fasterHolderAvailable). See nowCapFor in
+// applyRequestState.
+//
+// An untested peer always keeps one request, even beside a better holder:
+// torrent-stream gives every untested wire exactly one request, and
+// delivering it is the only way the peer can prove itself. Capping it at zero
+// strands a fast newcomer whenever the head piece is all there is to fetch --
+// it never delivers, so it never becomes eligible to steal from a slow holder
+// (TestBoostPieceStealsFromStalledReadaheadHolderInBudget in the server repo:
+// 4.9s instead of well under the 700ms player budget).
+func restrictedNowCap(better bool, myRate float64, nowLimit int) int {
+	untested := myRate <= 0
+	switch {
+	case better && untested:
+		return min(1, nowLimit)
+	case better:
+		return 0
+	case untested:
+		return nowLimit
+	default:
+		return -1
+	}
+}
+
 // fasterHolderAvailable reports whether another peer holding a piece is a
 // better source for it than a slow peer running at myRate: fast enough not to
 // be restricted itself, and faster than myRate. This is torrent-stream's rank
