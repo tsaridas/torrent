@@ -259,6 +259,15 @@ type ClientConfig struct {
 	// NowPrioritySlowPeerRate is the download rate, in bytes/s, below which a peer is
 	// restricted by NowPriorityRestrictedPeerRequests. See that field.
 	NowPrioritySlowPeerRate float64
+	// TorrentStreamPipeline gives every proven peer (one that has delivered
+	// data) at least the request pipeline the reference torrent-stream engine
+	// uses: round(45 * normalRange^4 + 5), normalRange = 1 - clamp((unchoked-1)/29),
+	// i.e. ~50 outstanding requests while few peers are unchoking us, falling
+	// to 5 at 30+. The library's own slow start sizes a peer from peakRequests
+	// -- requests added in the last update pass -- so a peer refilled a few
+	// requests at a time stays near a handful in flight however fast it is.
+	// Untested peers are unaffected; see NowPriorityRestrictedPeerRequests.
+	TorrentStreamPipeline bool
 }
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {

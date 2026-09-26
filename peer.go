@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -400,10 +401,29 @@ func (cn *Peer) nominalMaxRequests() maxRequests {
 	if cn.t != nil && cn.t.cl != nil {
 		bypass = cn.t.cl.config.NowPrioritySlowStartRequests
 	}
-	return nominalMaxRequestsForPeakRequests(
+	n := nominalMaxRequestsForPeakRequests(
 		cn.PeerMaxRequests, cn.peakRequests, maxLocalToRemoteRequests, bypass,
 		cn.hasWantedNowPriorityPiece(),
 	)
+	if cn.t != nil && cn.t.cl != nil && cn.t.cl.config.TorrentStreamPipeline && !cn.lastUsefulChunkReceived.IsZero() {
+		unchoked := 0
+		for pc := range cn.t.conns {
+			if !pc.peerChoking {
+				unchoked++
+			}
+		}
+		if ts := minInt(cn.PeerMaxRequests, torrentStreamRequests(unchoked), maxLocalToRemoteRequests); ts > n {
+			n = ts
+		}
+	}
+	return n
+}
+
+// torrentStreamRequests is torrent-stream's getRequestsNumber: the per-wire
+// request pipeline for a given number of peers unchoking us.
+func torrentStreamRequests(unchoked int) maxRequests {
+	r := 1 - math.Max(0, math.Min(1, float64(unchoked-1)/29))
+	return maxRequests(math.Round(45*math.Pow(r, 4) + 5))
 }
 
 // hasWantedNowPriorityPiece reports whether this peer has at least one
