@@ -299,6 +299,21 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 
 	t := p.t
 	originalRequestCount := current.Requests.GetCardinality()
+	// A restricted peer may hold only a few now-priority requests; see
+	// ClientConfig.NowPriorityRestrictedPeerRequests. nowHeld counts the ones
+	// it already has so the cap spans update passes.
+	nowLimit := t.cl.config.NowPriorityRestrictedPeerRequests
+	restricted := nowLimit > 0 && peerRestrictedForNowPriority(
+		p.downloadRate(), t.cl.config.NowPrioritySlowPeerRate)
+	nowHeld := 0
+	if restricted {
+		current.Requests.Iterate(func(r RequestIndex) bool {
+			if t.pieceIsNowPriority(r) {
+				nowHeld++
+			}
+			return true
+		})
+	}
 	for {
 		if requestHeap.Len() == 0 {
 			break
@@ -321,6 +336,16 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		}
 
 		existing := t.requestingPeer(req)
+		// Skipping here sends the restricted peer on to the next, lower
+		// priority request in the heap -- torrent-stream's "go elsewhere".
+		countsTowardNow := false
+		if restricted && existing != p && t.pieceIsNowPriority(req) {
+			if nowHeld >= nowLimit {
+				torrent.Add(nowPriorityRestrictedSkipsVar, 1)
+				continue
+			}
+			countsTowardNow = true
+		}
 		if existing != nil && existing != p {
 			// don't steal on cancel - because this is triggered by t.cancelRequest below
 			// which means that the cancelled can immediately try to steal back a request
@@ -393,6 +418,9 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			t.cancelRequest(req)
 		}
 		more = p.mustRequest(req)
+		if countsTowardNow {
+			nowHeld++
+		}
 		if !more {
 			break
 		}
@@ -537,4 +565,20 @@ func nowPriorityRequestOverdue(
 		return false
 	}
 	return stealerQueue < holderQueue
+}
+
+// peerRestrictedForNowPriority reports whether a peer is limited to
+// NowPriorityRestrictedPeerRequests on now-priority pieces. downloadRate is 0
+// for a peer that has delivered nothing, so an untested peer is always
+// restricted; a proven one is restricted while it runs below slowRate.
+// slowRate <= 0 restricts only untested peers.
+// nowPriorityRestrictedSkipsVar is the expvar key (in the "torrent" map)
+// counting now-priority requests a restricted peer was steered away from.
+const nowPriorityRestrictedSkipsVar = "now-priority restricted skips"
+
+func peerRestrictedForNowPriority(downloadRate, slowRate float64) bool {
+	if downloadRate <= 0 {
+		return true
+	}
+	return downloadRate < slowRate
 }

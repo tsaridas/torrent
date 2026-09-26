@@ -241,6 +241,22 @@ type ClientConfig struct {
 	// request_time_critical_pieces uses -- a piece blocking playback gets a deadline, and
 	// missing it moves the request rather than waiting on the holder indefinitely.
 	NowPriorityRequestDeadline time.Duration
+	// NowPriorityRestrictedPeerRequests caps how many PiecePriorityNow requests a restricted
+	// peer -- one whose download rate is below NowPrioritySlowPeerRate, which includes every
+	// peer that has not delivered anything yet -- may hold at once. The rest of its request
+	// budget goes to lower-priority pieces. Zero or negative disables the restriction.
+	//
+	// This is how the reference torrent-stream engine keeps the head of the stream off peers
+	// it knows nothing about: an untested wire gets one request, aimed at the tail of the
+	// selection, and reaches critical pieces only once it has downloaded something; a proven
+	// wire slower than SPEED_THRESHOLD (3 blocks/s) is kept off pieces a faster wire can
+	// finish in time. Without it, the slow-start bypass hands a brand-new peer a deep queue on
+	// the one piece playback is blocked on, and whichever peer happens to connect first --
+	// often a slow one -- holds it.
+	NowPriorityRestrictedPeerRequests int
+	// NowPrioritySlowPeerRate is the download rate, in bytes/s, below which a peer is
+	// restricted by NowPriorityRestrictedPeerRequests. See that field.
+	NowPrioritySlowPeerRate float64
 }
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {
