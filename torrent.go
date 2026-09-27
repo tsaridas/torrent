@@ -2380,7 +2380,13 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 	})
 	p := t.piece(piece)
 	p.numVerifies++
-	if !passed {
+	// Count only genuine failures -- the same condition the library uses to
+	// score a failed hash below. A piece is also hashed on the initial
+	// storage check, and a piece that simply has not been downloaded yet
+	// "fails" that check; counting it made PieceHashFailures report a
+	// failure for data nobody had served yet. Observed on n200: six
+	// last-piece "failures" in one round, with zero real ones logged.
+	if !passed && p.storageCompletionOk {
 		p.hashFailures++
 	}
 	t.cl.event.Broadcast()
