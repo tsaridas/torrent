@@ -53,3 +53,28 @@ func TestPrioritizedPeers(t *testing.T) {
 	min(nil)
 	pop(nil)
 }
+
+// Tracker and PEX peers are dialed before DHT results; source outranks the
+// BEP 40 priority, but not Trusted.
+func TestPrioritizedPeersPreferTrackerOverDHT(t *testing.T) {
+	pp := prioritizedPeers{
+		om: btree.New(3),
+		getPrio: func(p PeerInfo) peerPriority {
+			// DHT peer would win on BEP 40 priority alone.
+			if p.Source == PeerSourceDhtGetPeers {
+				return 100
+			}
+			return 1
+		},
+	}
+	dht := PeerInfo{Addr: ipPortAddr{IP: net.ParseIP("1.1.1.1"), Port: 1}, Source: PeerSourceDhtGetPeers}
+	tr := PeerInfo{Addr: ipPortAddr{IP: net.ParseIP("2.2.2.2"), Port: 2}, Source: PeerSourceTracker}
+	pp.Add(dht)
+	pp.Add(tr)
+	if got := pp.PopMax(); got.Source != PeerSourceTracker {
+		t.Fatalf("first dial %v, want the tracker peer", got.Source)
+	}
+	if got := pp.PopMax(); got.Source != PeerSourceDhtGetPeers {
+		t.Fatalf("second dial %v, want the DHT peer", got.Source)
+	}
+}
