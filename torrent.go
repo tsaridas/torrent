@@ -157,6 +157,10 @@ type Torrent struct {
 	// A cache of pieces we need to get. Calculated from various piece and file priorities and
 	// completion states elsewhere. Includes piece data and piece v2 hashes.
 	_pendingPieces roaring.Bitmap
+	// Incomplete pieces whose purePriority is PiecePriorityNow (SetPriorityNow
+	// and/or reader Now). Maintained in updatePiecePriorityNoTriggers for
+	// hasWantedNowPriorityPiece when ClientConfig.NowPieceBitmap is set.
+	_nowPriorityPieces roaring.Bitmap
 	// A cache of completed piece indices.
 	_completedPieces roaring.Bitmap
 	// Pieces that need to be hashed.
@@ -1473,10 +1477,26 @@ func (t *Torrent) updatePiecePriorityNoTriggers(piece pieceIndex) (pendingChange
 	p := t.piece(piece)
 	newPrio := p.effectivePriority()
 	// t.logger.Printf("torrent %p: piece %d: uncached priority: %v", t, piece, newPrio)
+	t.syncNowPriorityPiece(piece)
 	if newPrio == PiecePriorityNone && p.haveHash() {
 		return t._pendingPieces.CheckedRemove(uint32(piece))
 	} else {
 		return t._pendingPieces.CheckedAdd(uint32(piece))
+	}
+}
+
+// syncNowPriorityPiece keeps _nowPriorityPieces aligned with purePriority Now
+// on incomplete pieces.
+func (t *Torrent) syncNowPriorityPiece(piece pieceIndex) {
+	if !t.haveInfo() || int(piece) >= t.numPieces() {
+		return
+	}
+	p := t.piece(piece)
+	want := !t.pieceComplete(piece) && p.purePriority() == PiecePriorityNow
+	if want {
+		t._nowPriorityPieces.Add(uint32(piece))
+	} else {
+		t._nowPriorityPieces.Remove(uint32(piece))
 	}
 }
 
