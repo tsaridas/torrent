@@ -785,6 +785,9 @@ func (c *PeerConn) mainReadLoop() (err error) {
 				// only a single peer, our chunk balancing should smooth over this abuse.
 			}
 			c.peerChoking = true
+			if c.t != nil {
+				c.t.numUnchokedPeers--
+			}
 			c.updateExpectingChunks()
 		case pp.Unchoke:
 			if !c.peerChoking {
@@ -794,6 +797,9 @@ func (c *PeerConn) mainReadLoop() (err error) {
 				break
 			}
 			c.peerChoking = false
+			if c.t != nil {
+				c.t.numUnchokedPeers++
+			}
 			preservedCount := 0
 			c.requestState.Requests.Iterate(func(x RequestIndex) bool {
 				if !c.peerAllowedFast.Contains(c.t.pieceIndexOfRequestIndex(x)) {

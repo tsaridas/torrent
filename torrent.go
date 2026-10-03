@@ -107,6 +107,12 @@ type Torrent struct {
 	// open (not-closed) connections only.
 	conns               map[*PeerConn]struct{}
 	maxEstablishedConns int
+	// Peers that are not choking us. Updated on choke/unchoke/delete so
+	// nominalMaxRequests (TorrentStreamPipeline) need not walk conns.
+	numUnchokedPeers int
+	// Outstanding shadowRequests across conns (live or cancelled-pending).
+	// cancelShadowCopies returns early when this is 0.
+	numShadowRequests int
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.
 	halfOpen map[string]map[outgoingConnAttemptKey]*PeerInfo
@@ -1763,6 +1769,10 @@ func (t *Torrent) deletePeerConn(c *PeerConn) (ret bool) {
 	// Avoid adding a drop event more than once. Probably we should track whether we've generated
 	// the drop event against the PexConnState instead.
 	if ret {
+		if !c.peerChoking {
+			t.numUnchokedPeers--
+		}
+		c.dropAllShadowRequests()
 		if !t.cl.config.DisablePEX {
 			t.pex.Drop(c)
 		}
@@ -2293,6 +2303,9 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 		panic(len(t.conns))
 	}
 	t.conns[c] = struct{}{}
+	if !c.peerChoking {
+		t.numUnchokedPeers++
+	}
 	t.cl.event.Broadcast()
 	// We'll never receive the "p" extended handshake parameter.
 	if !t.cl.config.DisablePEX && !c.PeerExtensionBytes.SupportsExtended() {

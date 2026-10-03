@@ -4,6 +4,7 @@ import (
 	"expvar"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/go-quicktest/qt"
 )
@@ -131,10 +132,52 @@ func TestCancelShadowCopiesKeepsExpectation(t *testing.T) {
 	ri := tor.pieceRequestIndexOffset(0)
 	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
 	tor.cancelShadowCopies(ri, &b.Peer)
-	_, still := a.shadowRequests[ri]
+	cancelledAt, still := a.shadowRequests[ri]
 	qt.Check(t, qt.IsTrue(still))
+	qt.Check(t, qt.IsFalse(cancelledAt.IsZero()), qt.Commentf("must record cancel time"))
 	qt.Check(t, qt.Equals(a.validReceiveChunks[ri], 1))
 	tor.cl.unlock()
+}
+
+func TestShadowInFlightIgnoresReceivedAndExpiresCancel(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	defer tor.cl.unlock()
+	ri := tor.pieceRequestIndexOffset(0)
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 1))
+
+	// Cancel keeps the entry, still missing → still counts.
+	tor.cancelShadowCopies(ri, &b.Peer)
+	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 1))
+
+	// Chunk received (dirty): must not count toward the budget.
+	tor.dirtyChunks.Add(ri)
+	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 0))
+	_, still := a.shadowRequests[ri]
+	qt.Check(t, qt.IsTrue(still), qt.Commentf("kept until expire/arrival"))
+
+	// Expire the cancel: entry dropped entirely.
+	a.shadowRequests[ri] = a.shadowRequests[ri].Add(-shadowCancelExpire - time.Second)
+	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 0))
+	_, still = a.shadowRequests[ri]
+	qt.Check(t, qt.IsFalse(still))
+	qt.Check(t, qt.Equals(a.validReceiveChunks[ri], 0))
+	qt.Check(t, qt.Equals(tor.numShadowRequests, 0))
+}
+
+func TestCancelShadowCopiesNoopWithoutShadows(t *testing.T) {
+	tor := greetingTorrent(t)
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	defer tor.cl.unlock()
+	qt.Assert(t, qt.Equals(tor.numShadowRequests, 0))
+	// Must not touch peers when nothing is outstanding.
+	ri := tor.pieceRequestIndexOffset(0)
+	tor.cancelShadowCopies(ri, &b.Peer)
+	qt.Check(t, qt.Equals(len(a.shadowRequests), 0))
 }
 
 func TestDropAllShadowRequestsOnNonFastChoke(t *testing.T) {

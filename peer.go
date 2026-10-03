@@ -80,9 +80,11 @@ type (
 		// shadowRequests are duplicate requests sent by ShadowRequestAhead
 		// or EndgamePiece: on the wire and counted in validReceiveChunks,
 		// but not in requestState, so the tracked holder keeps its request.
-		// Both paths are capped (maxChunks × perChunk). See
-		// shadow-request.go and endgame-piece.go.
-		shadowRequests map[RequestIndex]struct{}
+		// Value is zero while live; non-zero is when cancelShadowCopies
+		// cancelled it (kept until arrival, Reject, or shadowCancelExpire
+		// so a silent cancel does not look like an unexpected chunk).
+		// Caps: maxChunks×perChunk per call, maxShadowInFlight torrent-wide.
+		shadowRequests map[RequestIndex]time.Time
 		// Indexed by metadata piece, set to true if posted and pending a
 		// response.
 		metadataRequests []bool
@@ -423,13 +425,7 @@ func (cn *Peer) nominalMaxRequests() maxRequests {
 		hasNow,
 	)
 	if cn.t != nil && cn.t.cl != nil && cn.t.cl.config.TorrentStreamPipeline && !cn.lastUsefulChunkReceived.IsZero() {
-		unchoked := 0
-		for pc := range cn.t.conns {
-			if !pc.peerChoking {
-				unchoked++
-			}
-		}
-		if ts := minInt(cn.PeerMaxRequests, torrentStreamRequests(unchoked), maxLocalToRemoteRequests); ts > n {
+		if ts := minInt(cn.PeerMaxRequests, torrentStreamRequests(cn.t.numUnchokedPeers), maxLocalToRemoteRequests); ts > n {
 			n = ts
 		}
 	}
@@ -553,8 +549,7 @@ func (cn *Peer) request(r RequestIndex) (more bool, err error) {
 	// second wire request. A duplicate on the wire can make the peer reject
 	// one copy; without fast extension that reject looks invalid and drops
 	// the connection.
-	if _, shadowed := cn.shadowRequests[r]; shadowed {
-		delete(cn.shadowRequests, r)
+	if cn.clearShadowFlag(r) {
 		cn.requestState.Requests.Add(r)
 		cn.t.requestState[r] = requestState{
 			peer: cn,
@@ -690,8 +685,7 @@ func (c *Peer) remoteRejectedRequest(r RequestIndex) bool {
 	// A rejected shadow request is expected (the peer may have choked us, or
 	// already sent the block), not a protocol violation: an invalid reject
 	// ends the connection.
-	if _, ok := c.shadowRequests[r]; ok {
-		delete(c.shadowRequests, r)
+	if c.clearShadowFlag(r) {
 		c.decExpectedChunkReceive(r)
 		return true
 	}
@@ -752,8 +746,7 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 		return errors.New("received unexpected chunk")
 	}
 	c.decExpectedChunkReceive(req)
-	if _, ok := c.shadowRequests[req]; ok {
-		delete(c.shadowRequests, req)
+	if c.clearShadowFlag(req) {
 		ChunksReceived.Add("shadow", 1)
 	}
 

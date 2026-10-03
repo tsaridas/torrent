@@ -1,11 +1,21 @@
 package torrent
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
 
 // maxShadowInFlight is a soft cap on outstanding shadow requests across all
 // peers of one torrent. Stops a long wait from ramping duplicates toward
 // peers×chunks as each 250ms round slides past already-shadowed peers.
 const maxShadowInFlight = 256
+
+// shadowCancelExpire is how long a cancelled shadow may keep its expectation
+// after cancelShadowCopies. Peers without the fast extension (and Transmission
+// before 4) honour cancel silently — without an expire those entries would
+// count forever against maxShadowInFlight. Dropping immediately reintroduces
+// the unexpected-chunk disconnect.
+const shadowCancelExpire = 30 * time.Second
 
 // ShadowRequestAhead sends duplicate requests for the first maxChunks
 // not-yet-received chunks at or after torrent offset off, each to up to
@@ -111,12 +121,38 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	return sent
 }
 
+// shadowInFlightLocked counts shadows that still compete for a missing
+// chunk. Cancelled entries older than shadowCancelExpire are dropped.
+// Entries whose chunk is already received do not count (they stay until
+// arrival/Reject/expire so a late copy is not "unexpected").
 func (t *Torrent) shadowInFlightLocked() int {
+	now := time.Now()
 	n := 0
 	for pc := range t.conns {
-		n += len(pc.shadowRequests)
+		for ri, cancelledAt := range pc.shadowRequests {
+			if !cancelledAt.IsZero() && now.Sub(cancelledAt) >= shadowCancelExpire {
+				pc.dropShadowRequest(ri)
+				continue
+			}
+			if !t.shadowChunkStillMissing(ri) {
+				continue
+			}
+			n++
+		}
 	}
 	return n
+}
+
+// shadowChunkStillMissing reports whether ri is still worth racing for.
+func (t *Torrent) shadowChunkStillMissing(ri RequestIndex) bool {
+	if !t.haveInfo() {
+		return false
+	}
+	pi := t.pieceIndexOfRequestIndex(ri)
+	if int(pi) >= t.numPieces() || t.pieceComplete(pi) {
+		return false
+	}
+	return !t.dirtyChunks.Contains(ri)
 }
 
 // shadowRequestsSentVar is the expvar key (in the "torrent" map) counting
