@@ -17,6 +17,17 @@ const (
 	DefaultNowPrioritySlowPeerRate = 3 * 16 * 1024
 )
 
+// SetNowPrioritySlowStartBudget sets NowPrioritySlowStartRequests and
+// NowPriorityRestrictedPeerRequests together. 0 disables the fresh-peer
+// bypass (and the restricted-peer Now cap). Negative values are treated as 0.
+func (cc *ClientConfig) SetNowPrioritySlowStartBudget(n int) {
+	if n < 0 {
+		n = 0
+	}
+	cc.NowPrioritySlowStartRequests = maxRequests(n)
+	cc.NowPriorityRestrictedPeerRequests = n
+}
+
 // SetNowPriorityRequestDefaults enables the recommended PiecePriorityNow steal
 // and slow-start tuning.
 func (cc *ClientConfig) SetNowPriorityRequestDefaults() {
