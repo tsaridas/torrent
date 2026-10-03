@@ -8,14 +8,15 @@ import "sort"
 // pieces), this stays on one critical piece — the cold-start "piece 0 /
 // probe head" shape — and keeps whichever copy of each chunk lands first.
 //
-// Same wire accounting as ShadowRequestAhead: validReceiveChunks +
-// shadowRequests, requestState untouched so the tracked holder keeps its
-// request. A second copy is dropped as redundant. Returns how many requests
-// were sent. Cost is at most maxChunks*perChunk duplicate blocks per call.
+// Same wire accounting as ShadowRequestAhead (via shadowRequestOne):
+// requestState untouched so the tracked holder keeps its request. A second
+// copy is dropped as redundant. Returns how many requests were sent. Cost is
+// at most maxChunks*perChunk duplicate blocks per call.
 //
 // Candidates are unchoked peers that have the piece, fastest first. No-ops
 // when the piece is not Now, is complete, has no missing chunks, or the
-// caps are non-positive.
+// caps are non-positive. A not-Now skip increments
+// endgamePieceNotNowSkipsVar so a demoted piece is visible in expvar.
 func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
 	if pi < 0 || maxChunks <= 0 || perChunk <= 0 {
 		return 0
@@ -30,6 +31,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
 	}
 	p := t.piece(pi)
 	if p.purePriority() != PiecePriorityNow {
+		torrent.Add(endgamePieceNotNowSkipsVar, 1)
 		return 0
 	}
 	nChunks := p.numChunks()
@@ -75,18 +77,9 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
 			if &pc.Peer == holder {
 				continue
 			}
-			if pc.validReceiveChunks[ri] > 0 {
+			if !pc.shadowRequestOne(ri) {
 				continue
 			}
-			if pc.validReceiveChunks == nil {
-				pc.validReceiveChunks = make(map[RequestIndex]int)
-			}
-			if pc.shadowRequests == nil {
-				pc.shadowRequests = make(map[RequestIndex]struct{})
-			}
-			pc.validReceiveChunks[ri]++
-			pc.shadowRequests[ri] = struct{}{}
-			pc._request(t.requestIndexToRequest(ri))
 			asked++
 			sent++
 		}
@@ -97,6 +90,10 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
 	return sent
 }
 
-// endgamePieceRequestsVar is the expvar key (in the "torrent" map) counting
-// requests sent by EndgamePiece.
-const endgamePieceRequestsVar = "endgame piece requests sent"
+const (
+	// endgamePieceRequestsVar counts requests sent by EndgamePiece.
+	endgamePieceRequestsVar = "endgame piece requests sent"
+	// endgamePieceNotNowSkipsVar counts EndgamePiece calls that found the
+	// piece no longer at PiecePriorityNow (demoted while a reader waited).
+	endgamePieceNotNowSkipsVar = "endgame piece not-now skips"
+)

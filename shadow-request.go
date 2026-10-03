@@ -78,18 +78,9 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 			if &pc.Peer == holder || !pc.peerHasPiece(pi) || pc.peerChoking && !pc.peerAllowedFast.Contains(pi) {
 				continue
 			}
-			if pc.validReceiveChunks[ri] > 0 {
+			if !pc.shadowRequestOne(ri) {
 				continue
 			}
-			if pc.validReceiveChunks == nil {
-				pc.validReceiveChunks = make(map[RequestIndex]int)
-			}
-			if pc.shadowRequests == nil {
-				pc.shadowRequests = make(map[RequestIndex]struct{})
-			}
-			pc.validReceiveChunks[ri]++
-			pc.shadowRequests[ri] = struct{}{}
-			pc._request(t.requestIndexToRequest(ri))
 			asked++
 			sent++
 		}
