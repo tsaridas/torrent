@@ -42,9 +42,9 @@ server. Status is relative to this branch.
 
 - `endgame_piece_requests` / `endgame_not_now_skips` are process-wide expvars;
   the HLS probe log prints them. After #3, probe-path waits can increment them.
-- Cap for cold file-head endgame is **2 rounds** of 32×4, then verified stays
-  on `EndgamePiece` (16×2) and unverified falls back to `ShadowRequestAhead`
-  (4×2).
+- Cold file-head endgame is **32×4 for the whole wait** (app
+  `endgameEvery=200ms`); mid-file verified stays on `EndgamePiece` (16×2).
+  A 2-round then shadow fallback lost the measured −0.28s start win.
 - `cancelShadowCopies` sends cancel but **keeps** validReceiveChunks +
   shadow flag until arrival/Reject/`shadowCancelExpire` (30s). Clearing
   first dropped fast peers; never clearing filled the in-flight budget on
