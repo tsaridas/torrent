@@ -772,13 +772,15 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 	// waiting for it to be written to storage.
 	piece.unpendChunkIndex(chunkIndexFromChunkSpec(ppReq.ChunkSpec, t.chunkSize))
 
-	// Cancel pending requests for this chunk from *other* peers.
+	// Cancel pending requests for this chunk from *other* peers, including
+	// shadow copies that are not in requestState.
 	if p := t.requestingPeer(req); p != nil {
 		if p == c {
 			panic("should not be pending request from conn that just received it")
 		}
 		p.cancel(req)
 	}
+	t.cancelShadowCopies(req, c)
 
 	err = func() error {
 		cl.unlock()

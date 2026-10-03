@@ -73,7 +73,9 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 	if len(peers) == 0 {
 		return 0
 	}
-	sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
+	if len(peers) > 4 {
+		sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
+	}
 
 	sent, chunks := 0, 0
 	base := t.pieceRequestIndexOffset(pi)

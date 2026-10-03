@@ -50,7 +50,12 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 		}
 		conns = append(conns, cand{pc, pc.downloadRate()})
 	}
-	sort.Slice(conns, func(i, j int) bool { return conns[i].rate > conns[j].rate })
+	if len(conns) == 0 {
+		return 0
+	}
+	if len(conns) > 4 {
+		sort.Slice(conns, func(i, j int) bool { return conns[i].rate > conns[j].rate })
+	}
 
 	sent, chunks := 0, 0
 	for pos := off; pos < total && chunks < maxChunks; {

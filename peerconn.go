@@ -775,6 +775,7 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			}
 			if !c.fastEnabled() {
 				c.deleteAllRequests("choked by non-fast PeerConn")
+				c.dropAllShadowRequests()
 			} else {
 				// We don't decrement pending requests here, let's wait for the peer to either
 				// reject or satisfy the outstanding requests. Additionally, some peers may unchoke

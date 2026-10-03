@@ -122,3 +122,17 @@ func endgameNotNowSkips() int64 {
 	}
 	return v.Value()
 }
+
+func TestDropAllShadowRequestsOnNonFastChoke(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, _ := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	ri := tor.pieceRequestIndexOffset(0)
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	qt.Assert(t, qt.Equals(len(a.shadowRequests), 1))
+	a.dropAllShadowRequests()
+	tor.cl.unlock()
+	qt.Check(t, qt.Equals(len(a.shadowRequests), 0))
+	qt.Check(t, qt.Equals(a.validReceiveChunks[ri], 0))
+}
