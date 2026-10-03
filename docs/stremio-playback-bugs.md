@@ -23,7 +23,7 @@ server. Status is relative to this branch.
 |---|---|---|
 | P1 | `nominalMaxRequests()` on every heap pop (walks all conns with pipeline on) | **fixed** — compute once per request pass |
 | P2 | `cancelPiecesOutsideFile` one write lock per piece (app `engine.go`) | **fixed** (app) — `CancelPieces` ranges |
-| P3 | Losing shadow copies never cancelled | **fixed** earlier — `cancelShadowCopies` on receive |
+| P3 | Losing shadow copies never cancelled | **fixed** — cancel without dropping expectation until arrival/reject |
 | P4 | Pipeline refill only when queue empty | open (low confidence) |
 | P5 | No per-chunk staleness gate before duplicating | open |
 | P6 | Promote/demote whole file on every stream flap | open (needs approval) |
@@ -38,6 +38,11 @@ server. Status is relative to this branch.
 
 - `endgame_piece_requests` / `endgame_not_now_skips` are process-wide expvars;
   the HLS probe log prints them. After #3, probe-path waits can increment them.
-- Cap for cold file-head endgame is also limited to **2 rounds per WaitAndRead
-  stall** in the app (`endgameMaxRounds`), separate from the per-call /
-  in-flight caps in this library.
+- Cap for cold file-head endgame is **2 rounds**, then WaitAndRead falls
+  back to ShadowRequestAhead (4×2 unverified / 16×2 verified).
+- `cancelShadowCopies` sends cancel but **keeps** validReceiveChunks +
+  shadow flag until arrival/reject (clearing first dropped fast peers).
+- Pending-peer de-dup uses `byAddr` (O(1) per add).
+- `hasWantedNowPriorityPiece` only when `peakRequests==0 && bypass>0`.
+- `PieceHashFailures` requires `allChunksDirty` when `storageCompletionOk`
+  is still false.

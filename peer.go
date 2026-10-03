@@ -414,9 +414,13 @@ func (cn *Peer) nominalMaxRequests() maxRequests {
 	if cn.t != nil && cn.t.cl != nil {
 		bypass = cn.t.cl.config.NowPrioritySlowStartRequests
 	}
+	hasNow := false
+	if cn.peakRequests == 0 && bypass > 0 {
+		hasNow = cn.hasWantedNowPriorityPiece()
+	}
 	n := nominalMaxRequestsForPeakRequests(
 		cn.PeerMaxRequests, cn.peakRequests, maxLocalToRemoteRequests, bypass,
-		cn.hasWantedNowPriorityPiece(),
+		hasNow,
 	)
 	if cn.t != nil && cn.t.cl != nil && cn.t.cl.config.TorrentStreamPipeline && !cn.lastUsefulChunkReceived.IsZero() {
 		unchoked := 0

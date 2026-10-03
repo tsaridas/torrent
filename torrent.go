@@ -2386,7 +2386,7 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 	// still queued behind that initial-check backlog can fail with
 	// storageCompletionOk still false -- those must count, or an unverified
 	// reader that already served the bytes never purges.
-	if !passed && hashIoErr == nil && (p.storageCompletionOk || len(p.dirtiers) > 0 || p.hasDirtyChunks()) {
+	if !passed && hashIoErr == nil && (p.storageCompletionOk || p.allChunksDirty()) {
 		p.hashFailures++
 	}
 	t.cl.event.Broadcast()

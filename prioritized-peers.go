@@ -49,8 +49,8 @@ func peerSourceRank(s PeerSource) int {
 	}
 }
 
-func samePeerAddr(a, b PeerInfo) bool {
-	return a.Addr.String() == b.Addr.String()
+func peerAddrKey(p PeerInfo) string {
+	return p.Addr.String()
 }
 
 // betterPendingPeer reports whether a is preferred over b when both share an
@@ -68,6 +68,7 @@ func betterPendingPeer(a, b prioritizedPeersItem) bool {
 
 type prioritizedPeers struct {
 	om      *btree.BTree
+	byAddr  map[string]prioritizedPeersItem
 	getPrio func(PeerInfo) peerPriority
 }
 
@@ -85,6 +86,24 @@ func (me *prioritizedPeers) Len() int {
 	return me.om.Len()
 }
 
+func (me *prioritizedPeers) ensureByAddr() {
+	if me.byAddr == nil {
+		me.byAddr = make(map[string]prioritizedPeersItem)
+	}
+}
+
+func (me *prioritizedPeers) remember(item prioritizedPeersItem) {
+	me.ensureByAddr()
+	me.byAddr[peerAddrKey(item.p)] = item
+}
+
+func (me *prioritizedPeers) forget(item prioritizedPeersItem) {
+	if me.byAddr == nil {
+		return
+	}
+	delete(me.byAddr, peerAddrKey(item.p))
+}
+
 // Returns true if a peer is replaced.
 func (me *prioritizedPeers) Add(p PeerInfo) bool {
 	_, ok := me.AddReturningReplacedPeer(p)
@@ -93,31 +112,26 @@ func (me *prioritizedPeers) Add(p PeerInfo) bool {
 
 // AddReturningReplacedPeer inserts p, keeping one entry per address. Source
 // is part of the btree sort key (tracker before DHT), so the same address
-// from two sources would otherwise be two pending dials. We delete any
-// same-address entries and keep the best (trusted, then source rank, then
-// BEP 40 priority).
+// from two sources would otherwise be two pending dials. Lookup is O(1) via
+// byAddr; we keep the best (trusted, then source rank, then BEP 40).
 func (me *prioritizedPeers) AddReturningReplacedPeer(p PeerInfo) (ret PeerInfo, ok bool) {
+	me.ensureByAddr()
 	best := prioritizedPeersItem{me.getPrio(p), p}
-	var same []prioritizedPeersItem
-	me.om.Ascend(func(i btree.Item) bool {
-		item := i.(prioritizedPeersItem)
-		if samePeerAddr(item.p, p) {
-			same = append(same, item)
-		}
-		return true
-	})
-	for _, item := range same {
-		me.om.Delete(item)
+	key := peerAddrKey(p)
+	if old, exists := me.byAddr[key]; exists {
+		me.om.Delete(old)
 		ok = true
-		ret = item.p
-		if betterPendingPeer(item, best) {
-			best = item
+		ret = old.p
+		if betterPendingPeer(old, best) {
+			best = old
 		}
 	}
 	if prev := me.om.ReplaceOrInsert(best); prev != nil {
 		ok = true
 		ret = prev.(prioritizedPeersItem).p
+		me.forget(prev.(prioritizedPeersItem))
 	}
+	me.remember(best)
 	return
 }
 
@@ -127,10 +141,13 @@ func (me *prioritizedPeers) DeleteMin() (ret prioritizedPeersItem, ok bool) {
 		return
 	}
 	ret = i.(prioritizedPeersItem)
+	me.forget(ret)
 	ok = true
 	return
 }
 
 func (me *prioritizedPeers) PopMax() PeerInfo {
-	return me.om.DeleteMax().(prioritizedPeersItem).p
+	item := me.om.DeleteMax().(prioritizedPeersItem)
+	me.forget(item)
+	return item.p
 }

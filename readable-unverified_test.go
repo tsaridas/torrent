@@ -106,13 +106,26 @@ func TestPieceHashFailuresCountsOnlyGenuineFailures(t *testing.T) {
 
 	// Downloaded this session but still behind the initial-check backlog
 	// (storageCompletionOk false): must count so unverified readers purge.
+	// All chunks received — a partial piece hashed by that backlog must not
+	// count (n200 last-piece false failures).
 	tor.cl.lock()
 	p.hashFailures = 0
 	p.storageCompletionOk = false
-	tor.dirtyChunks.Add(tor.pieceRequestIndexOffset(0))
+	for ci := chunkIndexType(0); ci < p.numChunks(); ci++ {
+		p.unpendChunkIndex(ci)
+	}
 	tor.pieceHashed(0, false, nil)
 	tor.cl.unlock()
-	qt.Check(t, qt.Equals(tor.PieceHashFailures(0), int64(1)), qt.Commentf("session-received failure must count"))
+	qt.Check(t, qt.Equals(tor.PieceHashFailures(0), int64(1)), qt.Commentf("full session-received failure must count"))
+
+	tor.cl.lock()
+	p.hashFailures = 0
+	p.storageCompletionOk = false
+	p.pendChunkIndex(0)
+	tor.dirtyChunks.Add(tor.pieceRequestIndexOffset(0) + 1)
+	tor.pieceHashed(0, false, nil)
+	tor.cl.unlock()
+	qt.Check(t, qt.Equals(tor.PieceHashFailures(0), int64(0)), qt.Commentf("partial dirty must not count"))
 
 	qt.Check(t, qt.Equals(tor.PieceHashFailures(-1), int64(0)))
 	qt.Check(t, qt.Equals(tor.PieceHashFailures(99), int64(0)))

@@ -36,6 +36,11 @@ func (pc *PeerConn) dropAllShadowRequests() {
 	pc.shadowRequests = nil
 }
 
+// cancelShadowCopies tells losing peers to stop sending a chunk that already
+// arrived. Keep validReceiveChunks and the shadow flag until the in-flight
+// copy or Reject lands -- Peer.cancel does the same for tracked requests.
+// Clearing them first made receiveChunk treat a late copy as unexpected and
+// dropped the connection (often a fast peer).
 func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
 	for pc := range t.conns {
 		if pc.closed.IsSet() {
@@ -47,7 +52,6 @@ func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
 		if _, ok := pc.shadowRequests[ri]; !ok {
 			continue
 		}
-		pc.dropShadowRequest(ri)
 		pc._cancel(ri)
 	}
 }
