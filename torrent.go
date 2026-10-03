@@ -117,6 +117,9 @@ type Torrent struct {
 	// successive EndgamePiece / ShadowRequestAhead ticks do not always prefer
 	// the same map-iteration peer when every downloadRate is 0.
 	shadowPeerRotate uint64
+	// lastEndgameFirstChunkPeers is peers asked/racing for the first missing
+	// chunk of the most recent EndgamePiece call (probe diagnostics).
+	lastEndgameFirstChunkPeers int
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.
 	halfOpen map[string]map[outgoingConnAttemptKey]*PeerInfo

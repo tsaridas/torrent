@@ -89,6 +89,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		inFlight = t.shadowInFlightLocked()
 	}
 	sent, chunks := 0, 0
+	firstChunkPeers := 0
 	base := t.pieceRequestIndexOffset(pi)
 	for ci := startCI; ci < nChunks && chunks < chunkLimit; ci++ {
 		if !peerBudget && inFlight >= maxShadowInFlight {
@@ -103,6 +104,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		ri := base + RequestIndex(ci)
 		holder := t.requestingPeer(ri)
 		asked := 0
+		peersForChunk := 0
 		for _, c := range peers {
 			if !peerBudget {
 				if asked >= perChunk || inFlight >= maxShadowInFlight {
@@ -122,6 +124,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 					continue
 				}
 				asked++
+				peersForChunk++
 				continue
 			} else if cancelled {
 				// Free the perChunk slot; peer was told to stop.
@@ -129,22 +132,56 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			}
 			if pc.validReceiveChunks[ri] > 0 {
 				asked++
+				peersForChunk++
 				continue
 			}
 			if !pc.shadowRequestOne(ri) {
 				continue
 			}
 			asked++
+			peersForChunk++
 			sent++
 			if !peerBudget {
 				inFlight++
 			}
 		}
+		if chunks == 1 {
+			firstChunkPeers = peersForChunk
+		}
 	}
+	t.lastEndgameFirstChunkPeers = firstChunkPeers
 	if sent > 0 {
 		torrent.Add(endgamePieceRequestsVar, int64(sent))
 	}
 	return sent
+}
+
+// LastEndgameFirstChunkPeers is how many peers were asked (or already racing)
+// for the first missing chunk of the most recent EndgamePiece call.
+func (t *Torrent) LastEndgameFirstChunkPeers() int {
+	t.cl.lock()
+	defer t.cl.unlock()
+	return t.lastEndgameFirstChunkPeers
+}
+
+// CountFreshNowPeers counts unchoked connections with peakRequests==0 that
+// still have at least one incomplete Now piece.
+func (t *Torrent) CountFreshNowPeers() int {
+	t.cl.lock()
+	defer t.cl.unlock()
+	n := 0
+	for pc := range t.conns {
+		if pc.closed.IsSet() {
+			continue
+		}
+		if pc.peakRequests != 0 {
+			continue
+		}
+		if pc.hasWantedNowPriorityPiece() {
+			n++
+		}
+	}
+	return n
 }
 
 const (
