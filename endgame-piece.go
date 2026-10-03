@@ -3,10 +3,15 @@ package torrent
 import "sort"
 
 // EndgamePiece asks up to perChunk additional peers for each of the first
-// maxChunks still-missing chunks of piece pi when that piece is
-// PiecePriorityNow. Unlike ShadowRequestAhead (a byte-offset window across
-// pieces), this stays on one critical piece — the cold-start "piece 0 /
-// probe head" shape — and keeps whichever copy of each chunk lands first.
+// maxChunks still-missing chunks of piece pi at or after torrent byte offset
+// off, when that piece is PiecePriorityNow. Unlike ShadowRequestAhead (a
+// byte-offset window that may cross pieces), this stays on one critical
+// piece — the cold-start "piece 0 / probe head" shape — and keeps whichever
+// copy of each chunk lands first.
+//
+// off should be the file start (or read head) in torrent coordinates so a
+// multi-file title that begins mid-piece does not duplicate the previous
+// file's leading chunks. Negative off is treated as the piece start.
 //
 // Same wire accounting as ShadowRequestAhead (via shadowRequestOne):
 // requestState untouched so the tracked holder keeps its request. A second
@@ -17,7 +22,7 @@ import "sort"
 // when the piece is not Now, is complete, has no missing chunks, or the
 // caps are non-positive. A not-Now skip increments
 // endgamePieceNotNowSkipsVar so a demoted piece is visible in expvar.
-func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
+func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int) int {
 	if pi < 0 || maxChunks <= 0 || perChunk <= 0 {
 		return 0
 	}
@@ -37,6 +42,19 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
 	nChunks := p.numChunks()
 	if nChunks <= 0 {
 		return 0
+	}
+	pieceLen := int64(t.info.PieceLength)
+	chunkSize := int64(t.chunkSize)
+	if pieceLen <= 0 || chunkSize <= 0 {
+		return 0
+	}
+	pieceStart := int64(pi) * pieceLen
+	startCI := chunkIndexType(0)
+	if off > pieceStart {
+		startCI = chunkIndexType((off - pieceStart) / chunkSize)
+		if startCI >= nChunks {
+			return 0
+		}
 	}
 	type cand struct {
 		pc   *PeerConn
@@ -59,7 +77,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
 
 	sent, chunks := 0, 0
 	base := t.pieceRequestIndexOffset(pi)
-	for ci := chunkIndexType(0); ci < nChunks && chunks < maxChunks; ci++ {
+	for ci := startCI; ci < nChunks && chunks < maxChunks; ci++ {
 		// dirtyChunks means received (same as ShadowRequestAhead): only ask
 		// for chunks we still need.
 		if p.chunkIndexDirty(ci) {
