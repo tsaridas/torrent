@@ -256,16 +256,56 @@ func TestEndgamePeerBudgetWholePieceAndRoom(t *testing.T) {
 	qt.Check(t, qt.Equals(sent, 6))
 	qt.Check(t, qt.Equals(len(a.shadowRequests), 3))
 	qt.Check(t, qt.Equals(len(b.shadowRequests), 3))
+	qt.Check(t, qt.Equals(a.liveShadowCount, 3))
+	qt.Check(t, qt.Equals(b.liveShadowCount, 3))
 
 	// No room left on a: PeerMaxRequests == outstanding shadows.
 	a.PeerMaxRequests = 3
 	// Clear b so only a would be asked; a is full.
 	b.dropAllShadowRequests()
 	b.validReceiveChunks = nil
+	// Allow another pass (one endgame per endgameTorrentInterval otherwise).
+	tor.cl.lock()
+	tor.lastEndgameAt = time.Time{}
+	tor.cl.unlock()
 	// a already has 3 live shadows and max 3 → room 0; b can take the piece again.
 	sent = tor.EndgamePiece(0, 0, 0, 0)
 	qt.Check(t, qt.Equals(sent, 3))
 	qt.Check(t, qt.Equals(len(b.shadowRequests), 3))
+}
+
+func TestEndgamePieceOnePassPerInterval(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	endgameTestPeers(t, tor)
+	qt.Check(t, qt.Equals(tor.EndgamePiece(0, 0, 2, 2), 4))
+	// Immediate second call is throttled even though peers could take more.
+	qt.Check(t, qt.Equals(tor.EndgamePiece(0, 0, 2, 2), 0))
+	tor.cl.lock()
+	tor.lastEndgameAt = time.Now().Add(-endgameTorrentInterval)
+	tor.cl.unlock()
+	// After the interval, a call that finds nothing new still runs the loop.
+	qt.Check(t, qt.Equals(tor.EndgamePiece(0, 0, 2, 2), 0))
+}
+
+func TestExpireCancelledShadowsFromCancelCopies(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	defer tor.cl.unlock()
+	ri := tor.pieceRequestIndexOffset(0)
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	tor.cancelShadowCopies(ri, &b.Peer)
+	qt.Check(t, qt.Equals(a.liveShadowCount, 0))
+	e := a.shadowRequests[ri]
+	e.cancelled = e.cancelled.Add(-shadowCancelExpire - time.Second)
+	a.shadowRequests[ri] = e
+	// Budget mode never calls shadowInFlightLocked; cancelShadowCopies must expire.
+	tor.cancelShadowCopies(ri+1, &b.Peer)
+	_, still := a.shadowRequests[ri]
+	qt.Check(t, qt.IsFalse(still))
+	qt.Check(t, qt.Equals(tor.numShadowRequests, 0))
 }
 
 func TestEndgameSilentShadowFreesPerChunkSlot(t *testing.T) {

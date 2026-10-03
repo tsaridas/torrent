@@ -329,6 +329,11 @@ func NewDefaultClientConfig() *ClientConfig {
 		StealRequestGrace:      initDurationFromEnv(stealRequestGraceEnvKey, defaultStealRequestGrace),
 		DialRateLimiter:        rate.NewLimiter(10, 10),
 		PieceHashersPerTorrent: 2,
+		// Cold-start defaults match the Stremio app (STREMIOSRV_*); A/B can
+		// turn them off explicitly.
+		EndgamePeerBudget: true,
+		ShadowPeerOrder:   true,
+		NowPieceBitmap:    true,
 	}
 	cc.DhtStartingNodes = func(network string) dht.StartingNodesGetter {
 		return func() ([]dht.Addr, error) { return dht.GlobalBootstrapAddrs(network) }

@@ -33,6 +33,7 @@ func (pc *PeerConn) shadowRequestOne(ri RequestIndex) bool {
 	}
 	pc.validReceiveChunks[ri]++
 	pc.shadowRequests[ri] = shadowEntry{sent: time.Now()}
+	pc.liveShadowCount++
 	if pc.t != nil {
 		pc.t.numShadowRequests++
 	}
@@ -56,18 +57,13 @@ func (p *Peer) shadowSlot(ri RequestIndex) (live, cancelled, silent bool) {
 }
 
 // shadowPeerRoom is how many more Requests this peer can take before hitting
-// PeerMaxRequests, counting tracked requests and live shadows.
+// PeerMaxRequests, counting tracked requests and live shadows. O(1).
 func (p *Peer) shadowPeerRoom() int {
 	max := int(p.PeerMaxRequests)
 	if max <= 0 {
 		return 0
 	}
-	n := int(p.requestState.Requests.GetCardinality())
-	for _, e := range p.shadowRequests {
-		if e.live() {
-			n++
-		}
-	}
+	n := int(p.requestState.Requests.GetCardinality()) + p.liveShadowCount
 	if n >= max {
 		return 0
 	}
@@ -78,8 +74,12 @@ func (p *Peer) shadowPeerRoom() int {
 // Does not touch validReceiveChunks — callers that drop the expectation
 // must also call decExpectedChunkReceive.
 func (p *Peer) clearShadowFlag(ri RequestIndex) bool {
-	if _, ok := p.shadowRequests[ri]; !ok {
+	e, ok := p.shadowRequests[ri]
+	if !ok {
 		return false
+	}
+	if e.live() && p.liveShadowCount > 0 {
+		p.liveShadowCount--
 	}
 	delete(p.shadowRequests, ri)
 	if p.t != nil && p.t.numShadowRequests > 0 {
@@ -101,6 +101,25 @@ func (p *Peer) dropAllShadowRequests() {
 	}
 }
 
+// expireCancelledShadowsLocked drops cancelled stubs older than
+// shadowCancelExpire. Budget-mode EndgamePiece never calls
+// shadowInFlightLocked, so expiry must run here (and from
+// cancelShadowCopies) or silent-cancel peers keep stubs forever and
+// numShadowRequests never returns to 0.
+func (t *Torrent) expireCancelledShadowsLocked() {
+	now := time.Now()
+	for pc := range t.conns {
+		for ri, e := range pc.shadowRequests {
+			if e.live() {
+				continue
+			}
+			if now.Sub(e.cancelled) >= shadowCancelExpire {
+				pc.dropShadowRequest(ri)
+			}
+		}
+	}
+}
+
 // cancelShadowCopies tells losing peers to stop sending a chunk that already
 // arrived. Keep validReceiveChunks and the shadow flag until the in-flight
 // copy or Reject lands -- Peer.cancel does the same for tracked requests.
@@ -109,6 +128,7 @@ func (p *Peer) dropAllShadowRequests() {
 // silently (no fast extension, old Transmission) keep the entry until
 // shadowCancelExpire so they do not permanently fill maxShadowInFlight.
 func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
+	t.expireCancelledShadowsLocked()
 	if t.numShadowRequests == 0 {
 		return
 	}
@@ -123,6 +143,11 @@ func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
 		e, ok := pc.shadowRequests[ri]
 		if !ok {
 			continue
+		}
+		if e.live() {
+			if pc.liveShadowCount > 0 {
+				pc.liveShadowCount--
+			}
 		}
 		// Mark cancelled; leave expectation until arrival/Reject/expire.
 		e.cancelled = now

@@ -42,11 +42,12 @@ server. Status is relative to this branch.
 
 - `endgame_piece_requests` / `endgame_not_now_skips` are process-wide expvars;
   the HLS probe log prints them. After #3, probe-path waits can increment them.
-- Cold file-head endgame is **32×6 for the whole wait** (app
-  `endgameEvery=200ms`, `maxShadowInFlight=512`); mid-file verified stays
-  on `EndgamePiece` (16×2). A 2-round then shadow fallback lost the
-  measured −0.28s start win. Probe-tail reads are `NotPlayhead` so they
-  do not share the shadow budget with the cold head.
+- Cold file-head endgame is **peer-budget whole-piece** by default (app
+  `endgameEvery=200ms`; A/B-off restores 32×6); mid-file verified stays
+  on `EndgamePiece` (**16×2** either way). One EndgamePiece pass per
+  torrent per 200ms; `liveShadowCount` keeps room O(1). Probe-tail uses
+  `NoShadow` (Now boost, no duplicates) so it does not share the shadow
+  budget with the cold head.
 - `cancelShadowCopies` sends cancel but **keeps** validReceiveChunks +
   shadow flag until arrival/Reject/`shadowCancelExpire` (30s). Clearing
   first dropped fast peers; counting cancelled stubs filled the budget

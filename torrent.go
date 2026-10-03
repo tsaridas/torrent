@@ -120,6 +120,9 @@ type Torrent struct {
 	// lastEndgameFirstChunkPeers is peers asked/racing for the first missing
 	// chunk of the most recent EndgamePiece call (probe diagnostics).
 	lastEndgameFirstChunkPeers int
+	// lastEndgameAt is when EndgamePiece last ran its peer loop. Concurrent
+	// Ranges on the same piece share one pass per endgameTorrentInterval.
+	lastEndgameAt time.Time
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.
 	halfOpen map[string]map[outgoingConnAttemptKey]*PeerInfo
@@ -1478,9 +1481,14 @@ func (t *Torrent) updatePiecePriorityNoTriggers(piece pieceIndex) (pendingChange
 		t.updatePieceRequestOrderPiece(piece)
 	}
 	p := t.piece(piece)
-	newPrio := p.effectivePriority()
+	// Compute purePriority once: effectivePriority and the Now bitmap both need it.
+	pure := p.purePriority()
+	newPrio := pure
+	if p.ignoreForRequests() {
+		newPrio = PiecePriorityNone
+	}
 	// t.logger.Printf("torrent %p: piece %d: uncached priority: %v", t, piece, newPrio)
-	t.syncNowPriorityPiece(piece)
+	t.syncNowPriorityPiece(piece, pure)
 	if newPrio == PiecePriorityNone && p.haveHash() {
 		return t._pendingPieces.CheckedRemove(uint32(piece))
 	} else {
@@ -1489,13 +1497,12 @@ func (t *Torrent) updatePiecePriorityNoTriggers(piece pieceIndex) (pendingChange
 }
 
 // syncNowPriorityPiece keeps _nowPriorityPieces aligned with purePriority Now
-// on incomplete pieces.
-func (t *Torrent) syncNowPriorityPiece(piece pieceIndex) {
+// on incomplete pieces. pure is the already-computed purePriority for piece.
+func (t *Torrent) syncNowPriorityPiece(piece pieceIndex, pure PiecePriority) {
 	if !t.haveInfo() || int(piece) >= t.numPieces() {
 		return
 	}
-	p := t.piece(piece)
-	want := !t.pieceComplete(piece) && p.purePriority() == PiecePriorityNow
+	want := !t.pieceComplete(piece) && pure == PiecePriorityNow
 	if want {
 		t._nowPriorityPieces.Add(uint32(piece))
 	} else {

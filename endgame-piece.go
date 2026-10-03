@@ -1,5 +1,12 @@
 package torrent
 
+import "time"
+
+// endgameTorrentInterval is the minimum gap between EndgamePiece peer-loop
+// passes on one torrent. Concurrent Ranges (VLC/Android open many on piece 0)
+// share a single pass so the client write lock is not held N times per tick.
+const endgameTorrentInterval = 200 * time.Millisecond
+
 // EndgamePiece asks additional peers for still-missing chunks of piece pi at
 // or after torrent byte offset off, when that piece is PiecePriorityNow.
 // Unlike ShadowRequestAhead (a byte-offset window that may cross pieces), this
@@ -10,30 +17,39 @@ package torrent
 // multi-file title that begins mid-piece does not duplicate the previous
 // file's leading chunks. Negative off is treated as the piece start.
 //
-// When ClientConfig.EndgamePeerBudget is set, each peer may take duplicates
-// only up to its own request-queue room (PeerMaxRequests minus outstanding
-// requests and live shadows); maxChunks<=0 covers the whole remaining piece;
-// maxShadowInFlight and perChunk are not applied. A live shadow older than
-// shadowSilentAge does not block asking other peers.
+// When maxChunks<=0 (or ClientConfig.EndgamePeerBudget with maxChunks<=0),
+// each peer may take duplicates only up to its own request-queue room
+// (PeerMaxRequests minus outstanding requests and live shadows);
+// maxChunks<=0 covers the whole remaining piece; maxShadowInFlight and
+// perChunk are not applied. A live shadow older than shadowSilentAge does
+// not block asking other peers. maxChunks<=0 always selects this shape so a
+// stream/engine settings disagree cannot make EndgamePiece a silent no-op.
 //
-// Otherwise (A/B off): up to perChunk peers for each of the first maxChunks
-// missing chunks, bounded by maxShadowInFlight.
+// Otherwise (capped / A/B off): up to perChunk peers for each of the first
+// maxChunks missing chunks, bounded by maxShadowInFlight.
 //
 // Same wire accounting as ShadowRequestAhead (via shadowRequestOne):
 // requestState untouched so the tracked holder keeps its request. A second
 // copy is dropped as redundant. Candidates are unchoked peers that have the
 // piece, fastest first. No-ops when the piece is not Now, is complete, or has
 // no missing chunks. A not-Now skip increments endgamePieceNotNowSkipsVar.
+// At most one peer-loop pass runs per endgameTorrentInterval per torrent.
 func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int) int {
-	peerBudget := t.cl != nil && t.cl.config.EndgamePeerBudget
 	if pi < 0 {
 		return 0
 	}
-	if !peerBudget && (maxChunks <= 0 || perChunk <= 0) {
+	// Whole-piece fill is selected by maxChunks<=0 (stream peer-budget path).
+	// That shape always uses per-peer room so a ClientConfig.EndgamePeerBudget
+	// left at the Go zero value cannot make EndgamePiece a silent no-op.
+	// Positive maxChunks×perChunk stays capped (mid-file 16×2, A/B-off 32×6)
+	// even when the config flag is on.
+	peerBudget := maxChunks <= 0
+	if !peerBudget && perChunk <= 0 {
 		return 0
 	}
 	t.cl.lock()
 	defer t.cl.unlock()
+	t.expireCancelledShadowsLocked()
 	if !t.haveInfo() || int(pi) >= t.numPieces() {
 		return 0
 	}
@@ -43,6 +59,9 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 	p := t.piece(pi)
 	if p.purePriority() != PiecePriorityNow {
 		torrent.Add(endgamePieceNotNowSkipsVar, 1)
+		return 0
+	}
+	if !t.lastEndgameAt.IsZero() && time.Since(t.lastEndgameAt) < endgameTorrentInterval {
 		return 0
 	}
 	nChunks := p.numChunks()
@@ -70,12 +89,16 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		if !pc.peerHasPiece(pi) || (pc.peerChoking && !pc.peerAllowedFast.Contains(pi)) {
 			continue
 		}
+		if peerBudget && pc.shadowPeerRoom() <= 0 {
+			continue
+		}
 		peers = append(peers, shadowPeerCand{pc, pc.downloadRate()})
 	}
 	if len(peers) == 0 {
 		return 0
 	}
 	t.sortShadowPeers(peers)
+	t.lastEndgameAt = time.Now()
 
 	chunkLimit := maxChunks
 	if peerBudget {
@@ -95,6 +118,9 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		if !peerBudget && inFlight >= maxShadowInFlight {
 			break
 		}
+		if len(peers) == 0 {
+			break
+		}
 		// dirtyChunks means received (same as ShadowRequestAhead): only ask
 		// for chunks we still need.
 		if p.chunkIndexDirty(ci) {
@@ -105,37 +131,45 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		holder := t.requestingPeer(ri)
 		asked := 0
 		peersForChunk := 0
-		for _, c := range peers {
+		for i := 0; i < len(peers); {
 			if !peerBudget {
 				if asked >= perChunk || inFlight >= maxShadowInFlight {
 					break
 				}
 			}
-			pc := c.pc
+			pc := peers[i].pc
 			if &pc.Peer == holder {
+				i++
 				continue
 			}
 			if peerBudget && pc.shadowPeerRoom() <= 0 {
+				peers[i] = peers[len(peers)-1]
+				peers = peers[:len(peers)-1]
 				continue
 			}
 			if live, cancelled, silent := pc.shadowSlot(ri); live {
 				if silent {
 					// Free the already-asked slot so other peers can race.
+					i++
 					continue
 				}
 				asked++
 				peersForChunk++
+				i++
 				continue
 			} else if cancelled {
 				// Free the perChunk slot; peer was told to stop.
+				i++
 				continue
 			}
 			if pc.validReceiveChunks[ri] > 0 {
 				asked++
 				peersForChunk++
+				i++
 				continue
 			}
 			if !pc.shadowRequestOne(ri) {
+				i++
 				continue
 			}
 			asked++
@@ -143,7 +177,12 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			sent++
 			if !peerBudget {
 				inFlight++
+			} else if pc.shadowPeerRoom() <= 0 {
+				peers[i] = peers[len(peers)-1]
+				peers = peers[:len(peers)-1]
+				continue
 			}
+			i++
 		}
 		if chunks == 1 {
 			firstChunkPeers = peersForChunk

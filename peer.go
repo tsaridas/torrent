@@ -85,6 +85,10 @@ type (
 		// ClientConfig.EndgamePeerBudget (per-peer room) or maxChunks×perChunk
 		// plus maxShadowInFlight.
 		shadowRequests map[RequestIndex]shadowEntry
+		// liveShadowCount is the number of live (not cancelled) entries in
+		// shadowRequests. Maintained by shadowRequestOne / clearShadowFlag /
+		// cancelShadowCopies so shadowPeerRoom stays O(1).
+		liveShadowCount int
 		// Indexed by metadata piece, set to true if posted and pending a
 		// response.
 		metadataRequests []bool
