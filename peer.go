@@ -80,7 +80,8 @@ type (
 		// shadowRequests are duplicate requests sent by ShadowRequestAhead
 		// or EndgamePiece: on the wire and counted in validReceiveChunks,
 		// but not in requestState, so the tracked holder keeps its request.
-		// See shadow-request.go and endgame-piece.go.
+		// Both paths are capped (maxChunks × perChunk). See
+		// shadow-request.go and endgame-piece.go.
 		shadowRequests map[RequestIndex]struct{}
 		// Indexed by metadata piece, set to true if posted and pending a
 		// response.

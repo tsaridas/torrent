@@ -1,19 +1,23 @@
 package torrent
 
-// EndgamePiece asks every capable peer for every still-dirty chunk of piece
-// pi when that piece is PiecePriorityNow. Unlike ShadowRequestAhead (a capped
-// number of extra peers on a byte-offset window), this is the cold-start
-// "piece 0 / probe head" shape: fill one critical piece from the whole swarm
-// and keep whichever copy of each chunk lands first.
+import "sort"
+
+// EndgamePiece asks up to perChunk additional peers for each of the first
+// maxChunks still-missing chunks of piece pi when that piece is
+// PiecePriorityNow. Unlike ShadowRequestAhead (a byte-offset window across
+// pieces), this stays on one critical piece — the cold-start "piece 0 /
+// probe head" shape — and keeps whichever copy of each chunk lands first.
 //
 // Same wire accounting as ShadowRequestAhead: validReceiveChunks +
 // shadowRequests, requestState untouched so the tracked holder keeps its
 // request. A second copy is dropped as redundant. Returns how many requests
-// were sent.
+// were sent. Cost is at most maxChunks*perChunk duplicate blocks per call.
 //
-// No-ops when the piece is not Now, is complete, or has no dirty chunks.
-func (t *Torrent) EndgamePiece(pi pieceIndex) int {
-	if pi < 0 {
+// Candidates are unchoked peers that have the piece, fastest first. No-ops
+// when the piece is not Now, is complete, has no missing chunks, or the
+// caps are non-positive.
+func (t *Torrent) EndgamePiece(pi pieceIndex, maxChunks, perChunk int) int {
+	if pi < 0 || maxChunks <= 0 || perChunk <= 0 {
 		return 0
 	}
 	t.cl.lock()
@@ -32,7 +36,11 @@ func (t *Torrent) EndgamePiece(pi pieceIndex) int {
 	if nChunks <= 0 {
 		return 0
 	}
-	var peers []*PeerConn
+	type cand struct {
+		pc   *PeerConn
+		rate float64
+	}
+	var peers []cand
 	for pc := range t.conns {
 		if pc.closed.IsSet() {
 			continue
@@ -40,22 +48,30 @@ func (t *Torrent) EndgamePiece(pi pieceIndex) int {
 		if !pc.peerHasPiece(pi) || (pc.peerChoking && !pc.peerAllowedFast.Contains(pi)) {
 			continue
 		}
-		peers = append(peers, pc)
+		peers = append(peers, cand{pc, pc.downloadRate()})
 	}
 	if len(peers) == 0 {
 		return 0
 	}
-	sent := 0
+	sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
+
+	sent, chunks := 0, 0
 	base := t.pieceRequestIndexOffset(pi)
-	for ci := chunkIndexType(0); ci < nChunks; ci++ {
+	for ci := chunkIndexType(0); ci < nChunks && chunks < maxChunks; ci++ {
 		// dirtyChunks means received (same as ShadowRequestAhead): only ask
 		// for chunks we still need.
 		if p.chunkIndexDirty(ci) {
 			continue
 		}
+		chunks++
 		ri := base + RequestIndex(ci)
 		holder := t.requestingPeer(ri)
-		for _, pc := range peers {
+		asked := 0
+		for _, c := range peers {
+			if asked >= perChunk {
+				break
+			}
+			pc := c.pc
 			if &pc.Peer == holder {
 				continue
 			}
@@ -71,6 +87,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex) int {
 			pc.validReceiveChunks[ri]++
 			pc.shadowRequests[ri] = struct{}{}
 			pc._request(t.requestIndexToRequest(ri))
+			asked++
 			sent++
 		}
 	}
