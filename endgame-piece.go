@@ -74,9 +74,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 	if len(peers) == 0 {
 		return 0
 	}
-	if len(peers) > 4 {
-		sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
-	}
+	sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
 
 	inFlight := t.shadowInFlightLocked()
 	sent, chunks := 0, 0
@@ -97,6 +95,13 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			}
 			pc := c.pc
 			if &pc.Peer == holder {
+				continue
+			}
+			if live, cancelled := pc.shadowSlot(ri); live {
+				asked++
+				continue
+			} else if cancelled {
+				// Free the perChunk slot; peer was told to stop.
 				continue
 			}
 			if pc.validReceiveChunks[ri] > 0 {

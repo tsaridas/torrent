@@ -16,7 +16,7 @@ server. Status is relative to this branch.
 | 7 | `Peer.request` can send a second wire request when a shadow already exists | **fixed** — promote shadow into `requestState` |
 | 8 | `PieceHashFailures` misses failures when `storageCompletionOk` is still false | **fixed** — count when `allChunksDirty` / dirtiers |
 | 9 | `ReadableUnverifiedLen` can spin on piece-aligned v2/hybrid (`pieceEnd-pos==0`) | **fixed** — break when advance `<= 0` |
-| 10 | Cancelled shadows on silent-cancel peers permanently fill `maxShadowInFlight` | **fixed** — count only missing chunks; expire cancelled after 30s |
+| 10 | Cancelled shadows on silent-cancel peers permanently fill `maxShadowInFlight` | **fixed** — live+missing only; cancelled stubs expire after 30s (kept for disconnect safety, not budget) |
 
 ## Performance
 
@@ -42,14 +42,17 @@ server. Status is relative to this branch.
 
 - `endgame_piece_requests` / `endgame_not_now_skips` are process-wide expvars;
   the HLS probe log prints them. After #3, probe-path waits can increment them.
-- Cold file-head endgame is **32×4 for the whole wait** (app
-  `endgameEvery=200ms`); mid-file verified stays on `EndgamePiece` (16×2).
-  A 2-round then shadow fallback lost the measured −0.28s start win.
+- Cold file-head endgame is **32×6 for the whole wait** (app
+  `endgameEvery=200ms`, `maxShadowInFlight=512`); mid-file verified stays
+  on `EndgamePiece` (16×2). A 2-round then shadow fallback lost the
+  measured −0.28s start win. Probe-tail reads are `NotPlayhead` so they
+  do not share the shadow budget with the cold head.
 - `cancelShadowCopies` sends cancel but **keeps** validReceiveChunks +
   shadow flag until arrival/Reject/`shadowCancelExpire` (30s). Clearing
-  first dropped fast peers; never clearing filled the in-flight budget on
-  silent-cancel peers.
-- `shadowInFlightLocked` counts only shadows whose chunk is still missing.
+  first dropped fast peers; counting cancelled stubs filled the budget
+  and starved EndgamePiece after a cancel burst.
+- `shadowInFlightLocked` counts only **live** shadows whose chunk is
+  still missing; cancelled peers free `perChunk` slots for a new peer.
 - Pending-peer de-dup uses `byAddr` (O(1) per add).
 - `hasWantedNowPriorityPiece` only when `peakRequests==0 && bypass>0`.
 - `PieceHashFailures` requires `allChunksDirty` when `storageCompletionOk`

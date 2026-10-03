@@ -5,16 +5,19 @@ import (
 	"time"
 )
 
-// maxShadowInFlight is a soft cap on outstanding shadow requests across all
-// peers of one torrent. Stops a long wait from ramping duplicates toward
-// peers×chunks as each 250ms round slides past already-shadowed peers.
-const maxShadowInFlight = 256
+// maxShadowInFlight is a soft cap on outstanding *live* shadow requests
+// across all peers of one torrent. Stops a long wait from ramping
+// duplicates toward peers×chunks as each tick slides past already-shadowed
+// peers. Sized for concurrent playhead EndgamePiece (32×6) plus a second
+// reader without starving the cold head; cancelled stubs do not count.
+const maxShadowInFlight = 512
 
 // shadowCancelExpire is how long a cancelled shadow may keep its expectation
 // after cancelShadowCopies. Peers without the fast extension (and Transmission
-// before 4) honour cancel silently — without an expire those entries would
-// count forever against maxShadowInFlight. Dropping immediately reintroduces
-// the unexpected-chunk disconnect.
+// before 4) honour cancel silently — without an expire those stubs would
+// linger forever (disconnect-safety map + validReceiveChunks). Dropping
+// immediately reintroduces the unexpected-chunk disconnect. Cancelled stubs
+// do not count against maxShadowInFlight.
 const shadowCancelExpire = 30 * time.Second
 
 // ShadowRequestAhead sends duplicate requests for the first maxChunks
@@ -70,9 +73,7 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	if len(conns) == 0 {
 		return 0
 	}
-	if len(conns) > 4 {
-		sort.Slice(conns, func(i, j int) bool { return conns[i].rate > conns[j].rate })
-	}
+	sort.Slice(conns, func(i, j int) bool { return conns[i].rate > conns[j].rate })
 
 	inFlight := t.shadowInFlightLocked()
 	sent, chunks := 0, 0
@@ -101,9 +102,17 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 			if &pc.Peer == holder || !pc.peerHasPiece(pi) || pc.peerChoking && !pc.peerAllowedFast.Contains(pi) {
 				continue
 			}
+			if live, cancelled := pc.shadowSlot(ri); live {
+				// Already racing — counts toward the cap so the next round
+				// does not walk on to every other peer.
+				asked++
+				continue
+			} else if cancelled {
+				// Told to stop; skip this peer but free the perChunk slot
+				// so a different peer can be asked.
+				continue
+			}
 			if pc.validReceiveChunks[ri] > 0 {
-				// Already outstanding — counts toward the cap so the next
-				// round does not walk on to every other peer.
 				asked++
 				continue
 			}
@@ -121,17 +130,20 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	return sent
 }
 
-// shadowInFlightLocked counts shadows that still compete for a missing
-// chunk. Cancelled entries older than shadowCancelExpire are dropped.
-// Entries whose chunk is already received do not count (they stay until
-// arrival/Reject/expire so a late copy is not "unexpected").
+// shadowInFlightLocked counts live shadows that still compete for a missing
+// chunk. Cancelled entries older than shadowCancelExpire are dropped; until
+// then they stay for disconnect safety but do not reserve budget slots
+// (otherwise a cancel burst fills maxShadowInFlight and EndgamePiece
+// returns 0 while the playhead is starved). Received chunks do not count.
 func (t *Torrent) shadowInFlightLocked() int {
 	now := time.Now()
 	n := 0
 	for pc := range t.conns {
 		for ri, cancelledAt := range pc.shadowRequests {
-			if !cancelledAt.IsZero() && now.Sub(cancelledAt) >= shadowCancelExpire {
-				pc.dropShadowRequest(ri)
+			if !cancelledAt.IsZero() {
+				if now.Sub(cancelledAt) >= shadowCancelExpire {
+					pc.dropShadowRequest(ri)
+				}
 				continue
 			}
 			if !t.shadowChunkStillMissing(ri) {

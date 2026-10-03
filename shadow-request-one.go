@@ -26,6 +26,19 @@ func (pc *PeerConn) shadowRequestOne(ri RequestIndex) bool {
 	return true
 }
 
+// shadowSlot reports whether ri is a live shadow (cancel time zero) or a
+// cancelled stub still held for disconnect safety.
+func (p *Peer) shadowSlot(ri RequestIndex) (live, cancelled bool) {
+	at, ok := p.shadowRequests[ri]
+	if !ok {
+		return false, false
+	}
+	if at.IsZero() {
+		return true, false
+	}
+	return false, true
+}
+
 // clearShadowFlag removes ri from shadowRequests and the torrent count.
 // Does not touch validReceiveChunks — callers that drop the expectation
 // must also call decExpectedChunkReceive.

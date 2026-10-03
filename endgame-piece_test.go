@@ -149,12 +149,14 @@ func TestShadowInFlightIgnoresReceivedAndExpiresCancel(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
 	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 1))
 
-	// Cancel keeps the entry, still missing → still counts.
-	tor.cancelShadowCopies(ri, &b.Peer)
+	// Chunk received (dirty): live shadow must not count toward the budget.
+	tor.dirtyChunks.Add(ri)
+	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 0))
+	tor.dirtyChunks.Remove(ri)
 	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 1))
 
-	// Chunk received (dirty): must not count toward the budget.
-	tor.dirtyChunks.Add(ri)
+	// Cancel keeps the entry for disconnect safety but frees the budget.
+	tor.cancelShadowCopies(ri, &b.Peer)
 	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 0))
 	_, still := a.shadowRequests[ri]
 	qt.Check(t, qt.IsTrue(still), qt.Commentf("kept until expire/arrival"))
