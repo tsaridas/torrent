@@ -1,7 +1,6 @@
 package torrent
 
 import (
-	"sort"
 	"time"
 )
 
@@ -59,21 +58,17 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	if pieceLen <= 0 || chunkSize <= 0 {
 		return 0
 	}
-	type cand struct {
-		pc   *PeerConn
-		rate float64
-	}
-	var conns []cand
+	var conns []shadowPeerCand
 	for pc := range t.conns {
 		if pc.closed.IsSet() {
 			continue
 		}
-		conns = append(conns, cand{pc, pc.downloadRate()})
+		conns = append(conns, shadowPeerCand{pc, pc.downloadRate()})
 	}
 	if len(conns) == 0 {
 		return 0
 	}
-	sort.Slice(conns, func(i, j int) bool { return conns[i].rate > conns[j].rate })
+	t.sortShadowPeers(conns)
 
 	inFlight := t.shadowInFlightLocked()
 	sent, chunks := 0, 0

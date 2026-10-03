@@ -113,6 +113,10 @@ type Torrent struct {
 	// Outstanding shadowRequests across conns (live or cancelled-pending).
 	// cancelShadowCopies returns early when this is 0.
 	numShadowRequests int
+	// shadowPeerRotate advances each sortShadowPeers cold-start tie-break so
+	// successive EndgamePiece / ShadowRequestAhead ticks do not always prefer
+	// the same map-iteration peer when every downloadRate is 0.
+	shadowPeerRotate uint64
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.
 	halfOpen map[string]map[outgoingConnAttemptKey]*PeerInfo

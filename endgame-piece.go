@@ -1,7 +1,5 @@
 package torrent
 
-import "sort"
-
 // EndgamePiece asks additional peers for still-missing chunks of piece pi at
 // or after torrent byte offset off, when that piece is PiecePriorityNow.
 // Unlike ShadowRequestAhead (a byte-offset window that may cross pieces), this
@@ -64,11 +62,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			return 0
 		}
 	}
-	type cand struct {
-		pc   *PeerConn
-		rate float64
-	}
-	var peers []cand
+	var peers []shadowPeerCand
 	for pc := range t.conns {
 		if pc.closed.IsSet() {
 			continue
@@ -76,12 +70,12 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		if !pc.peerHasPiece(pi) || (pc.peerChoking && !pc.peerAllowedFast.Contains(pi)) {
 			continue
 		}
-		peers = append(peers, cand{pc, pc.downloadRate()})
+		peers = append(peers, shadowPeerCand{pc, pc.downloadRate()})
 	}
 	if len(peers) == 0 {
 		return 0
 	}
-	sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
+	t.sortShadowPeers(peers)
 
 	chunkLimit := maxChunks
 	if peerBudget {
