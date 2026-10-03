@@ -545,22 +545,29 @@ func (cn *Peer) request(r RequestIndex) (more bool, err error) {
 	if cn.requestState.Requests.Contains(r) {
 		return true, nil
 	}
-	// Already asked as a shadow: promote into requestState instead of a
+	// Live shadow (cancel time zero): promote into requestState instead of a
 	// second wire request. A duplicate on the wire can make the peer reject
 	// one copy; without fast extension that reject looks invalid and drops
-	// the connection.
-	if cn.clearShadowFlag(r) {
-		cn.requestState.Requests.Add(r)
-		cn.t.requestState[r] = requestState{
-			peer: cn,
-			when: time.Now(),
+	// the connection. Cancelled shadows must not promote — the peer was told
+	// to stop and may never answer (hash-retry within shadowCancelExpire).
+	if cancelledAt, ok := cn.shadowRequests[r]; ok {
+		cn.clearShadowFlag(r)
+		if cancelledAt.IsZero() {
+			cn.requestState.Requests.Add(r)
+			cn.t.requestState[r] = requestState{
+				peer: cn,
+				when: time.Now(),
+			}
+			cn.updateExpectingChunks()
+			ppReq := cn.t.requestIndexToRequest(r)
+			for _, f := range cn.callbacks.SentRequest {
+				f(PeerRequestEvent{cn, ppReq})
+			}
+			return true, nil
 		}
-		cn.updateExpectingChunks()
-		ppReq := cn.t.requestIndexToRequest(r)
-		for _, f := range cn.callbacks.SentRequest {
-			f(PeerRequestEvent{cn, ppReq})
-		}
-		return true, nil
+		// Fall through: send a fresh Request. Keep validReceiveChunks so a
+		// late cancelled copy is not unexpected; the path below increments
+		// for the new wire request.
 	}
 	if maxRequests(cn.requestState.Requests.GetCardinality()) >= cn.nominalMaxRequests() {
 		return true, errors.New("too many outstanding requests")

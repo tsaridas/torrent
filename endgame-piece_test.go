@@ -180,6 +180,51 @@ func TestCancelShadowCopiesNoopWithoutShadows(t *testing.T) {
 	qt.Check(t, qt.Equals(len(a.shadowRequests), 0))
 }
 
+// TestRequestPromotesOnlyLiveShadow: a cancelled shadow must not be promoted
+// into requestState without a new wire Request — the peer was told to cancel.
+func TestRequestPromotesOnlyLiveShadow(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	defer tor.cl.unlock()
+	// shouldRequest panics while a piece is hashing / queued; greeting
+	// torrents may still be finishing the initial check.
+	tor.initialPieceCheckDisabled = true
+	tor.piecesQueuedForHash.Clear()
+	tor.piece(0).hashing = false
+	ri := tor.pieceRequestIndexOffset(0)
+
+	// Live shadow → promote, no new Request on the wire.
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	before := a.messageWriter.writeBuffer.Len()
+	more, err := a.request(ri)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.IsTrue(more))
+	qt.Check(t, qt.IsTrue(a.requestState.Requests.Contains(ri)))
+	qt.Check(t, qt.Equals(a.messageWriter.writeBuffer.Len(), before),
+		qt.Commentf("live promote must not send another Request"))
+	qt.Check(t, qt.Equals(len(a.shadowRequests), 0))
+
+	// Clean slate for the cancelled case.
+	a.deleteRequest(ri)
+	delete(a.t.requestState, ri)
+	a.dropAllShadowRequests()
+	a.validReceiveChunks = nil
+
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	tor.cancelShadowCopies(ri, &b.Peer)
+	qt.Assert(t, qt.IsFalse(a.shadowRequests[ri].IsZero()))
+	before = a.messageWriter.writeBuffer.Len()
+	more, err = a.request(ri)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.IsTrue(more))
+	qt.Check(t, qt.IsTrue(a.requestState.Requests.Contains(ri)))
+	qt.Check(t, qt.Equals(len(a.shadowRequests), 0))
+	qt.Check(t, qt.Not(qt.Equals(a.messageWriter.writeBuffer.Len(), before)),
+		qt.Commentf("cancelled shadow must send a fresh Request"))
+}
+
 func TestDropAllShadowRequestsOnNonFastChoke(t *testing.T) {
 	tor := greetingTorrent(t)
 	tor.piece(0).SetPriorityNow()
