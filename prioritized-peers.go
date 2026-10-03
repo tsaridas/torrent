@@ -49,6 +49,23 @@ func peerSourceRank(s PeerSource) int {
 	}
 }
 
+func samePeerAddr(a, b PeerInfo) bool {
+	return a.Addr.String() == b.Addr.String()
+}
+
+// betterPendingPeer reports whether a is preferred over b when both share an
+// address: trusted wins, then source rank, then BEP 40 priority.
+func betterPendingPeer(a, b prioritizedPeersItem) bool {
+	if a.p.Trusted != b.p.Trusted {
+		return a.p.Trusted
+	}
+	ra, rb := peerSourceRank(a.p.Source), peerSourceRank(b.p.Source)
+	if ra != rb {
+		return ra > rb
+	}
+	return a.prio > b.prio
+}
+
 type prioritizedPeers struct {
 	om      *btree.BTree
 	getPrio func(PeerInfo) peerPriority
@@ -70,17 +87,37 @@ func (me *prioritizedPeers) Len() int {
 
 // Returns true if a peer is replaced.
 func (me *prioritizedPeers) Add(p PeerInfo) bool {
-	return me.om.ReplaceOrInsert(prioritizedPeersItem{me.getPrio(p), p}) != nil
+	_, ok := me.AddReturningReplacedPeer(p)
+	return ok
 }
 
-// Returns true if a peer is replaced.
+// AddReturningReplacedPeer inserts p, keeping one entry per address. Source
+// is part of the btree sort key (tracker before DHT), so the same address
+// from two sources would otherwise be two pending dials. We delete any
+// same-address entries and keep the best (trusted, then source rank, then
+// BEP 40 priority).
 func (me *prioritizedPeers) AddReturningReplacedPeer(p PeerInfo) (ret PeerInfo, ok bool) {
-	item := me.om.ReplaceOrInsert(prioritizedPeersItem{me.getPrio(p), p})
-	if item == nil {
-		return
+	best := prioritizedPeersItem{me.getPrio(p), p}
+	var same []prioritizedPeersItem
+	me.om.Ascend(func(i btree.Item) bool {
+		item := i.(prioritizedPeersItem)
+		if samePeerAddr(item.p, p) {
+			same = append(same, item)
+		}
+		return true
+	})
+	for _, item := range same {
+		me.om.Delete(item)
+		ok = true
+		ret = item.p
+		if betterPendingPeer(item, best) {
+			best = item
+		}
 	}
-	ret = item.(prioritizedPeersItem).p
-	ok = true
+	if prev := me.om.ReplaceOrInsert(best); prev != nil {
+		ok = true
+		ret = prev.(prioritizedPeersItem).p
+	}
 	return
 }
 

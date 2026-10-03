@@ -104,6 +104,16 @@ func TestPieceHashFailuresCountsOnlyGenuineFailures(t *testing.T) {
 	tor.cl.unlock()
 	qt.Check(t, qt.Equals(tor.PieceHashFailures(0), int64(1)))
 
+	// Downloaded this session but still behind the initial-check backlog
+	// (storageCompletionOk false): must count so unverified readers purge.
+	tor.cl.lock()
+	p.hashFailures = 0
+	p.storageCompletionOk = false
+	tor.dirtyChunks.Add(tor.pieceRequestIndexOffset(0))
+	tor.pieceHashed(0, false, nil)
+	tor.cl.unlock()
+	qt.Check(t, qt.Equals(tor.PieceHashFailures(0), int64(1)), qt.Commentf("session-received failure must count"))
+
 	qt.Check(t, qt.Equals(tor.PieceHashFailures(-1), int64(0)))
 	qt.Check(t, qt.Equals(tor.PieceHashFailures(99), int64(0)))
 }

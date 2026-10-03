@@ -338,12 +338,16 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			return true
 		})
 	}
+	// One pass: walking all conns inside nominalMaxRequests (TorrentStream
+	// pipeline) on every heap pop was milliseconds under the write lock with
+	// hundreds of peers. The budget does not change within this loop.
+	maxReq := p.nominalMaxRequests()
 	for {
 		if requestHeap.Len() == 0 {
 			break
 		}
 		numPending := maxRequests(current.Requests.GetCardinality() + current.Cancelled.GetCardinality())
-		if numPending >= p.nominalMaxRequests() {
+		if numPending >= maxReq {
 			break
 		}
 		req := heap.Pop(requestHeap)

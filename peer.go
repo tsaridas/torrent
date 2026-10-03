@@ -256,11 +256,23 @@ func (cn *Peer) statusFlags() (ret string) {
 }
 
 func (cn *Peer) downloadRate() float64 {
-	num := cn._stats.BytesReadUsefulData.Int64()
+	// Intended bytes only: shadow-delivered chunks count as useful data but
+	// do not extend expecting time, so UsefulData / expectingTime can be
+	// +Inf for a peer that only answered shadows. Steal, restricted-peer
+	// ranking and shadow peer sort all use this rate.
+	num := cn._stats.BytesReadUsefulIntendedData.Int64()
 	if num == 0 {
 		return 0
 	}
-	return float64(num) / cn.totalExpectingTime().Seconds()
+	den := cn.totalExpectingTime().Seconds()
+	if den <= 0 {
+		return 0
+	}
+	rate := float64(num) / den
+	if math.IsInf(rate, 0) || math.IsNaN(rate) {
+		return 0
+	}
+	return rate
 }
 
 func (p *Peer) DownloadRate() float64 {
@@ -430,18 +442,27 @@ func torrentStreamRequests(unchoked int) maxRequests {
 // hasWantedNowPriorityPiece reports whether this peer has at least one
 // incomplete piece currently at PiecePriorityNow -- a piece blocking
 // playback right now. See nowPrioritySlowStartBypass.
+//
+// Must match pieceIsNowPriority / purePriority, not only readerNowPieces:
+// the Stremio server marks the playhead with Piece.SetPriorityNow and never
+// creates a torrent.Reader, so a Reader-only check left
+// NowPrioritySlowStartRequests inert.
 func (cn *Peer) hasWantedNowPriorityPiece() bool {
 	t := cn.t
-	if !t.haveInfo() {
+	if t == nil || !t.haveInfo() {
 		return false
 	}
 	found := false
-	t.readerNowPieces().IterTyped(func(piece int) bool {
-		if t.pieceComplete(piece) || !cn.peerHasPiece(piece) {
+	cn.peerPieces().Iterate(func(i uint32) bool {
+		pi := pieceIndex(i)
+		if t.pieceComplete(pi) {
 			return true
 		}
-		found = true
-		return false
+		if t.piece(pi).purePriority() == PiecePriorityNow {
+			found = true
+			return false
+		}
+		return true
 	})
 	return found
 }
@@ -522,6 +543,24 @@ func (cn *Peer) request(r RequestIndex) (more bool, err error) {
 		panic(err)
 	}
 	if cn.requestState.Requests.Contains(r) {
+		return true, nil
+	}
+	// Already asked as a shadow: promote into requestState instead of a
+	// second wire request. A duplicate on the wire can make the peer reject
+	// one copy; without fast extension that reject looks invalid and drops
+	// the connection.
+	if _, shadowed := cn.shadowRequests[r]; shadowed {
+		delete(cn.shadowRequests, r)
+		cn.requestState.Requests.Add(r)
+		cn.t.requestState[r] = requestState{
+			peer: cn,
+			when: time.Now(),
+		}
+		cn.updateExpectingChunks()
+		ppReq := cn.t.requestIndexToRequest(r)
+		for _, f := range cn.callbacks.SentRequest {
+			f(PeerRequestEvent{cn, ppReq})
+		}
 		return true, nil
 	}
 	if maxRequests(cn.requestState.Requests.GetCardinality()) >= cn.nominalMaxRequests() {

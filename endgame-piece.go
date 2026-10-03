@@ -15,8 +15,9 @@ import "sort"
 //
 // Same wire accounting as ShadowRequestAhead (via shadowRequestOne):
 // requestState untouched so the tracked holder keeps its request. A second
-// copy is dropped as redundant. Returns how many requests were sent. Cost is
-// at most maxChunks*perChunk duplicate blocks per call.
+// copy is dropped as redundant. Peers that already have an outstanding
+// receive for a chunk count toward perChunk. Total outstanding shadows are
+// also bounded by maxShadowInFlight. Returns how many requests were sent.
 //
 // Candidates are unchoked peers that have the piece, fastest first. No-ops
 // when the piece is not Now, is complete, has no missing chunks, or the
@@ -77,9 +78,10 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
 	}
 
+	inFlight := t.shadowInFlightLocked()
 	sent, chunks := 0, 0
 	base := t.pieceRequestIndexOffset(pi)
-	for ci := startCI; ci < nChunks && chunks < maxChunks; ci++ {
+	for ci := startCI; ci < nChunks && chunks < maxChunks && inFlight < maxShadowInFlight; ci++ {
 		// dirtyChunks means received (same as ShadowRequestAhead): only ask
 		// for chunks we still need.
 		if p.chunkIndexDirty(ci) {
@@ -90,11 +92,15 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		holder := t.requestingPeer(ri)
 		asked := 0
 		for _, c := range peers {
-			if asked >= perChunk {
+			if asked >= perChunk || inFlight >= maxShadowInFlight {
 				break
 			}
 			pc := c.pc
 			if &pc.Peer == holder {
+				continue
+			}
+			if pc.validReceiveChunks[ri] > 0 {
+				asked++
 				continue
 			}
 			if !pc.shadowRequestOne(ri) {
@@ -102,6 +108,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			}
 			asked++
 			sent++
+			inFlight++
 		}
 	}
 	if sent > 0 {

@@ -45,6 +45,12 @@ func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 		pi := pieceIndex(pos / pieceLen)
 		pieceStart := int64(pi) * pieceLen
 		pieceEnd := pieceStart + int64(t.pieceLength(pi))
+		// v2/hybrid piece-aligned files can make pieceLength shorter than
+		// the index math implies; pieceEnd-pos then hits 0 and this loop
+		// never advances under the client read lock.
+		if pieceEnd <= pos {
+			break
+		}
 		if t.pieceComplete(pi) {
 			n += pieceEnd - pos
 			continue
@@ -58,7 +64,11 @@ func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 		if chunkEnd > pieceEnd {
 			chunkEnd = pieceEnd
 		}
-		n += chunkEnd - pos
+		adv := chunkEnd - pos
+		if adv <= 0 {
+			break
+		}
+		n += adv
 	}
 	if n > max {
 		n = max

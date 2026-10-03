@@ -2,6 +2,11 @@ package torrent
 
 import "sort"
 
+// maxShadowInFlight is a soft cap on outstanding shadow requests across all
+// peers of one torrent. Stops a long wait from ramping duplicates toward
+// peers×chunks as each 250ms round slides past already-shadowed peers.
+const maxShadowInFlight = 256
+
 // ShadowRequestAhead sends duplicate requests for the first maxChunks
 // not-yet-received chunks at or after torrent offset off, each to up to
 // perChunk additional peers, and returns how many requests it sent.
@@ -19,11 +24,13 @@ import "sort"
 // the block is accepted when it arrives -- receiveChunk then treats it as
 // unintended-but-useful, writes it, and cancels the tracked holder's request.
 // A copy arriving second is dropped as redundant. requestState is untouched,
-// so the tracked holder keeps its request until one of those happens. The
-// cost is at most maxChunks*perChunk duplicate 16 KiB blocks per call.
+// so the tracked holder keeps its request until one of those happens.
+// Peers that already have an outstanding (shadow) receive for a chunk count
+// toward perChunk without sending again. Total outstanding shadows on the
+// torrent are also bounded by maxShadowInFlight.
 //
 // Candidates are unchoked peers that have the piece, fastest first; the
-// tracked holder and peers already asked for the chunk are skipped.
+// tracked holder is skipped.
 func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	if off < 0 || maxChunks <= 0 || perChunk <= 0 {
 		return 0
@@ -57,8 +64,9 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 		sort.Slice(conns, func(i, j int) bool { return conns[i].rate > conns[j].rate })
 	}
 
+	inFlight := t.shadowInFlightLocked()
 	sent, chunks := 0, 0
-	for pos := off; pos < total && chunks < maxChunks; {
+	for pos := off; pos < total && chunks < maxChunks && inFlight < maxShadowInFlight; {
 		pi := pieceIndex(pos / pieceLen)
 		pieceStart := int64(pi) * pieceLen
 		if t.pieceComplete(pi) {
@@ -76,11 +84,17 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 		holder := t.requestingPeer(ri)
 		asked := 0
 		for _, c := range conns {
-			if asked >= perChunk {
+			if asked >= perChunk || inFlight >= maxShadowInFlight {
 				break
 			}
 			pc := c.pc
 			if &pc.Peer == holder || !pc.peerHasPiece(pi) || pc.peerChoking && !pc.peerAllowedFast.Contains(pi) {
+				continue
+			}
+			if pc.validReceiveChunks[ri] > 0 {
+				// Already outstanding — counts toward the cap so the next
+				// round does not walk on to every other peer.
+				asked++
 				continue
 			}
 			if !pc.shadowRequestOne(ri) {
@@ -88,12 +102,21 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 			}
 			asked++
 			sent++
+			inFlight++
 		}
 	}
 	if sent > 0 {
 		torrent.Add(shadowRequestsSentVar, int64(sent))
 	}
 	return sent
+}
+
+func (t *Torrent) shadowInFlightLocked() int {
+	n := 0
+	for pc := range t.conns {
+		n += len(pc.shadowRequests)
+	}
+	return n
 }
 
 // shadowRequestsSentVar is the expvar key (in the "torrent" map) counting
