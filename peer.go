@@ -77,10 +77,10 @@ type (
 		// and implementation differences, we may receive chunks that are no longer in the set of
 		// requests actually want. This could use a roaring.BSI if the memory use becomes noticeable.
 		validReceiveChunks map[RequestIndex]int
-		// shadowRequests are duplicate requests sent by ShadowRequestAhead:
-		// on the wire and counted in validReceiveChunks, but not in
-		// requestState, so the tracked holder keeps its request. See
-		// shadow-request.go.
+		// shadowRequests are duplicate requests sent by ShadowRequestAhead
+		// or EndgamePiece: on the wire and counted in validReceiveChunks,
+		// but not in requestState, so the tracked holder keeps its request.
+		// See shadow-request.go and endgame-piece.go.
 		shadowRequests map[RequestIndex]struct{}
 		// Indexed by metadata piece, set to true if posted and pending a
 		// response.
