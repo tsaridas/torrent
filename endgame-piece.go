@@ -2,29 +2,36 @@ package torrent
 
 import "sort"
 
-// EndgamePiece asks up to perChunk additional peers for each of the first
-// maxChunks still-missing chunks of piece pi at or after torrent byte offset
-// off, when that piece is PiecePriorityNow. Unlike ShadowRequestAhead (a
-// byte-offset window that may cross pieces), this stays on one critical
-// piece — the cold-start "piece 0 / probe head" shape — and keeps whichever
-// copy of each chunk lands first.
+// EndgamePiece asks additional peers for still-missing chunks of piece pi at
+// or after torrent byte offset off, when that piece is PiecePriorityNow.
+// Unlike ShadowRequestAhead (a byte-offset window that may cross pieces), this
+// stays on one critical piece — the cold-start "piece 0 / probe head" shape —
+// and keeps whichever copy of each chunk lands first.
 //
 // off should be the file start (or read head) in torrent coordinates so a
 // multi-file title that begins mid-piece does not duplicate the previous
 // file's leading chunks. Negative off is treated as the piece start.
 //
+// When ClientConfig.EndgamePeerBudget is set, each peer may take duplicates
+// only up to its own request-queue room (PeerMaxRequests minus outstanding
+// requests and live shadows); maxChunks<=0 covers the whole remaining piece;
+// maxShadowInFlight and perChunk are not applied. A live shadow older than
+// shadowSilentAge does not block asking other peers.
+//
+// Otherwise (A/B off): up to perChunk peers for each of the first maxChunks
+// missing chunks, bounded by maxShadowInFlight.
+//
 // Same wire accounting as ShadowRequestAhead (via shadowRequestOne):
 // requestState untouched so the tracked holder keeps its request. A second
-// copy is dropped as redundant. Peers that already have an outstanding
-// receive for a chunk count toward perChunk. Total outstanding shadows are
-// also bounded by maxShadowInFlight. Returns how many requests were sent.
-//
-// Candidates are unchoked peers that have the piece, fastest first. No-ops
-// when the piece is not Now, is complete, has no missing chunks, or the
-// caps are non-positive. A not-Now skip increments
-// endgamePieceNotNowSkipsVar so a demoted piece is visible in expvar.
+// copy is dropped as redundant. Candidates are unchoked peers that have the
+// piece, fastest first. No-ops when the piece is not Now, is complete, or has
+// no missing chunks. A not-Now skip increments endgamePieceNotNowSkipsVar.
 func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int) int {
-	if pi < 0 || maxChunks <= 0 || perChunk <= 0 {
+	peerBudget := t.cl != nil && t.cl.config.EndgamePeerBudget
+	if pi < 0 {
+		return 0
+	}
+	if !peerBudget && (maxChunks <= 0 || perChunk <= 0) {
 		return 0
 	}
 	t.cl.lock()
@@ -76,10 +83,23 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].rate > peers[j].rate })
 
-	inFlight := t.shadowInFlightLocked()
+	chunkLimit := maxChunks
+	if peerBudget {
+		if maxChunks <= 0 || maxChunks > int(nChunks) {
+			chunkLimit = int(nChunks)
+		}
+	}
+
+	inFlight := 0
+	if !peerBudget {
+		inFlight = t.shadowInFlightLocked()
+	}
 	sent, chunks := 0, 0
 	base := t.pieceRequestIndexOffset(pi)
-	for ci := startCI; ci < nChunks && chunks < maxChunks && inFlight < maxShadowInFlight; ci++ {
+	for ci := startCI; ci < nChunks && chunks < chunkLimit; ci++ {
+		if !peerBudget && inFlight >= maxShadowInFlight {
+			break
+		}
 		// dirtyChunks means received (same as ShadowRequestAhead): only ask
 		// for chunks we still need.
 		if p.chunkIndexDirty(ci) {
@@ -90,14 +110,23 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		holder := t.requestingPeer(ri)
 		asked := 0
 		for _, c := range peers {
-			if asked >= perChunk || inFlight >= maxShadowInFlight {
-				break
+			if !peerBudget {
+				if asked >= perChunk || inFlight >= maxShadowInFlight {
+					break
+				}
 			}
 			pc := c.pc
 			if &pc.Peer == holder {
 				continue
 			}
-			if live, cancelled := pc.shadowSlot(ri); live {
+			if peerBudget && pc.shadowPeerRoom() <= 0 {
+				continue
+			}
+			if live, cancelled, silent := pc.shadowSlot(ri); live {
+				if silent {
+					// Free the already-asked slot so other peers can race.
+					continue
+				}
 				asked++
 				continue
 			} else if cancelled {
@@ -113,7 +142,9 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			}
 			asked++
 			sent++
-			inFlight++
+			if !peerBudget {
+				inFlight++
+			}
 		}
 	}
 	if sent > 0 {

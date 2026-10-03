@@ -132,9 +132,9 @@ func TestCancelShadowCopiesKeepsExpectation(t *testing.T) {
 	ri := tor.pieceRequestIndexOffset(0)
 	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
 	tor.cancelShadowCopies(ri, &b.Peer)
-	cancelledAt, still := a.shadowRequests[ri]
+	e, still := a.shadowRequests[ri]
 	qt.Check(t, qt.IsTrue(still))
-	qt.Check(t, qt.IsFalse(cancelledAt.IsZero()), qt.Commentf("must record cancel time"))
+	qt.Check(t, qt.IsFalse(e.cancelled.IsZero()), qt.Commentf("must record cancel time"))
 	qt.Check(t, qt.Equals(a.validReceiveChunks[ri], 1))
 	tor.cl.unlock()
 }
@@ -162,7 +162,9 @@ func TestShadowInFlightIgnoresReceivedAndExpiresCancel(t *testing.T) {
 	qt.Check(t, qt.IsTrue(still), qt.Commentf("kept until expire/arrival"))
 
 	// Expire the cancel: entry dropped entirely.
-	a.shadowRequests[ri] = a.shadowRequests[ri].Add(-shadowCancelExpire - time.Second)
+	e := a.shadowRequests[ri]
+	e.cancelled = e.cancelled.Add(-shadowCancelExpire - time.Second)
+	a.shadowRequests[ri] = e
 	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 0))
 	_, still = a.shadowRequests[ri]
 	qt.Check(t, qt.IsFalse(still))
@@ -216,7 +218,7 @@ func TestRequestPromotesOnlyLiveShadow(t *testing.T) {
 
 	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
 	tor.cancelShadowCopies(ri, &b.Peer)
-	qt.Assert(t, qt.IsFalse(a.shadowRequests[ri].IsZero()))
+	qt.Assert(t, qt.IsFalse(a.shadowRequests[ri].live()))
 	before = a.messageWriter.writeBuffer.Len()
 	more, err = a.request(ri)
 	qt.Assert(t, qt.IsNil(err))
@@ -239,4 +241,48 @@ func TestDropAllShadowRequestsOnNonFastChoke(t *testing.T) {
 	tor.cl.unlock()
 	qt.Check(t, qt.Equals(len(a.shadowRequests), 0))
 	qt.Check(t, qt.Equals(a.validReceiveChunks[ri], 0))
+}
+
+func TestEndgamePeerBudgetWholePieceAndRoom(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.cl.config.EndgamePeerBudget = true
+	tor.piece(0).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	a.PeerMaxRequests = 250
+	b.PeerMaxRequests = 250
+
+	// maxChunks=0 → whole piece (3 chunks) × 2 peers = 6.
+	sent := tor.EndgamePiece(0, 0, 0, 0)
+	qt.Check(t, qt.Equals(sent, 6))
+	qt.Check(t, qt.Equals(len(a.shadowRequests), 3))
+	qt.Check(t, qt.Equals(len(b.shadowRequests), 3))
+
+	// No room left on a: PeerMaxRequests == outstanding shadows.
+	a.PeerMaxRequests = 3
+	// Clear b so only a would be asked; a is full.
+	b.dropAllShadowRequests()
+	b.validReceiveChunks = nil
+	// a already has 3 live shadows and max 3 → room 0; b can take the piece again.
+	sent = tor.EndgamePiece(0, 0, 0, 0)
+	qt.Check(t, qt.Equals(sent, 3))
+	qt.Check(t, qt.Equals(len(b.shadowRequests), 3))
+}
+
+func TestEndgameSilentShadowFreesPerChunkSlot(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	ri := tor.pieceRequestIndexOffset(0)
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	e := a.shadowRequests[ri]
+	e.sent = time.Now().Add(-shadowSilentAge - time.Millisecond)
+	a.shadowRequests[ri] = e
+	tor.cl.unlock()
+
+	// Cap 1 peer per chunk: silent a must not consume the slot; b gets asked.
+	sent := tor.EndgamePiece(0, 0, 1, 1)
+	qt.Check(t, qt.Equals(sent, 1))
+	_, onB := b.shadowRequests[ri]
+	qt.Check(t, qt.IsTrue(onB))
 }

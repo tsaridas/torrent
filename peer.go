@@ -80,11 +80,11 @@ type (
 		// shadowRequests are duplicate requests sent by ShadowRequestAhead
 		// or EndgamePiece: on the wire and counted in validReceiveChunks,
 		// but not in requestState, so the tracked holder keeps its request.
-		// Value is zero while live; non-zero is when cancelShadowCopies
-		// cancelled it (kept until arrival, Reject, or shadowCancelExpire
-		// so a silent cancel does not look like an unexpected chunk).
-		// Caps: maxChunks×perChunk per call, maxShadowInFlight torrent-wide.
-		shadowRequests map[RequestIndex]time.Time
+		// See shadowEntry: sent while live; cancelled set by cancelShadowCopies
+		// (kept until arrival, Reject, or shadowCancelExpire). Caps depend on
+		// ClientConfig.EndgamePeerBudget (per-peer room) or maxChunks×perChunk
+		// plus maxShadowInFlight.
+		shadowRequests map[RequestIndex]shadowEntry
 		// Indexed by metadata piece, set to true if posted and pending a
 		// response.
 		metadataRequests []bool
@@ -545,14 +545,14 @@ func (cn *Peer) request(r RequestIndex) (more bool, err error) {
 	if cn.requestState.Requests.Contains(r) {
 		return true, nil
 	}
-	// Live shadow (cancel time zero): promote into requestState instead of a
-	// second wire request. A duplicate on the wire can make the peer reject
-	// one copy; without fast extension that reject looks invalid and drops
-	// the connection. Cancelled shadows must not promote — the peer was told
-	// to stop and may never answer (hash-retry within shadowCancelExpire).
-	if cancelledAt, ok := cn.shadowRequests[r]; ok {
+	// Live shadow: promote into requestState instead of a second wire request.
+	// A duplicate on the wire can make the peer reject one copy; without fast
+	// extension that reject looks invalid and drops the connection. Cancelled
+	// shadows must not promote — the peer was told to stop and may never
+	// answer (hash-retry within shadowCancelExpire).
+	if e, ok := cn.shadowRequests[r]; ok {
 		cn.clearShadowFlag(r)
-		if cancelledAt.IsZero() {
+		if e.live() {
 			cn.requestState.Requests.Add(r)
 			cn.t.requestState[r] = requestState{
 				peer: cn,

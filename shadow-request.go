@@ -102,7 +102,11 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 			if &pc.Peer == holder || !pc.peerHasPiece(pi) || pc.peerChoking && !pc.peerAllowedFast.Contains(pi) {
 				continue
 			}
-			if live, cancelled := pc.shadowSlot(ri); live {
+			if live, cancelled, silent := pc.shadowSlot(ri); live {
+				if silent {
+					// Free the already-asked slot so other peers can race.
+					continue
+				}
 				// Already racing — counts toward the cap so the next round
 				// does not walk on to every other peer.
 				asked++
@@ -139,9 +143,9 @@ func (t *Torrent) shadowInFlightLocked() int {
 	now := time.Now()
 	n := 0
 	for pc := range t.conns {
-		for ri, cancelledAt := range pc.shadowRequests {
-			if !cancelledAt.IsZero() {
-				if now.Sub(cancelledAt) >= shadowCancelExpire {
+		for ri, e := range pc.shadowRequests {
+			if !e.live() {
+				if now.Sub(e.cancelled) >= shadowCancelExpire {
 					pc.dropShadowRequest(ri)
 				}
 				continue

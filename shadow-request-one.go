@@ -2,6 +2,20 @@ package torrent
 
 import "time"
 
+// shadowEntry tracks one duplicate request. Sent is when the Request went on
+// the wire; Cancelled is zero while live and set by cancelShadowCopies.
+type shadowEntry struct {
+	sent      time.Time
+	cancelled time.Time
+}
+
+func (e shadowEntry) live() bool { return e.cancelled.IsZero() }
+
+// shadowSilentAge is how long a live shadow may occupy a perChunk / peer-budget
+// "already asked" slot before EndgamePiece treats it as silent and asks other
+// peers. The expectation stays for disconnect safety.
+const shadowSilentAge = 500 * time.Millisecond
+
 // shadowRequestOne sends a duplicate request for ri on pc without touching
 // requestState. The block is accepted when it arrives (validReceiveChunks);
 // receiveChunk treats a second copy as redundant and cancels the tracked
@@ -15,10 +29,10 @@ func (pc *PeerConn) shadowRequestOne(ri RequestIndex) bool {
 		pc.validReceiveChunks = make(map[RequestIndex]int)
 	}
 	if pc.shadowRequests == nil {
-		pc.shadowRequests = make(map[RequestIndex]time.Time)
+		pc.shadowRequests = make(map[RequestIndex]shadowEntry)
 	}
 	pc.validReceiveChunks[ri]++
-	pc.shadowRequests[ri] = time.Time{} // live; cancelShadowCopies sets cancelledAt
+	pc.shadowRequests[ri] = shadowEntry{sent: time.Now()}
 	if pc.t != nil {
 		pc.t.numShadowRequests++
 	}
@@ -26,17 +40,38 @@ func (pc *PeerConn) shadowRequestOne(ri RequestIndex) bool {
 	return true
 }
 
-// shadowSlot reports whether ri is a live shadow (cancel time zero) or a
-// cancelled stub still held for disconnect safety.
-func (p *Peer) shadowSlot(ri RequestIndex) (live, cancelled bool) {
-	at, ok := p.shadowRequests[ri]
+// shadowSlot reports whether ri is a live shadow or a cancelled stub still
+// held for disconnect safety. silent is true when a live shadow is older than
+// shadowSilentAge (does not count toward perChunk / already-asked).
+func (p *Peer) shadowSlot(ri RequestIndex) (live, cancelled, silent bool) {
+	e, ok := p.shadowRequests[ri]
 	if !ok {
-		return false, false
+		return false, false, false
 	}
-	if at.IsZero() {
-		return true, false
+	if !e.live() {
+		return false, true, false
 	}
-	return false, true
+	silent = !e.sent.IsZero() && time.Since(e.sent) >= shadowSilentAge
+	return true, false, silent
+}
+
+// shadowPeerRoom is how many more Requests this peer can take before hitting
+// PeerMaxRequests, counting tracked requests and live shadows.
+func (p *Peer) shadowPeerRoom() int {
+	max := int(p.PeerMaxRequests)
+	if max <= 0 {
+		return 0
+	}
+	n := int(p.requestState.Requests.GetCardinality())
+	for _, e := range p.shadowRequests {
+		if e.live() {
+			n++
+		}
+	}
+	if n >= max {
+		return 0
+	}
+	return max - n
 }
 
 // clearShadowFlag removes ri from shadowRequests and the torrent count.
@@ -85,11 +120,13 @@ func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
 		if winner != nil && &pc.Peer == winner {
 			continue
 		}
-		if _, ok := pc.shadowRequests[ri]; !ok {
+		e, ok := pc.shadowRequests[ri]
+		if !ok {
 			continue
 		}
 		// Mark cancelled; leave expectation until arrival/Reject/expire.
-		pc.shadowRequests[ri] = now
+		e.cancelled = now
+		pc.shadowRequests[ri] = e
 		pc._cancel(ri)
 	}
 }
