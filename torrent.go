@@ -120,9 +120,14 @@ type Torrent struct {
 	// lastEndgameFirstChunkPeers is peers asked/racing for the first missing
 	// chunk of the most recent EndgamePiece call (probe diagnostics).
 	lastEndgameFirstChunkPeers int
-	// lastEndgameAt is when EndgamePiece last ran its peer loop. Concurrent
-	// Ranges on the same piece share one pass per endgameTorrentInterval.
-	lastEndgameAt time.Time
+	// lastEndgameAtByPiece is when EndgamePiece last ran its peer loop for
+	// each piece. Concurrent Ranges on the same piece share one pass per
+	// endgamePieceInterval; other pieces are not starved by that throttle.
+	lastEndgameAtByPiece map[pieceIndex]time.Time
+	// lastShadowExpire is when expireCancelledShadowsLocked last ran a full
+	// sweep. cancelShadowCopies can fire per received chunk; the sweep is
+	// rate-limited to shadowExpireInterval.
+	lastShadowExpire time.Time
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.
 	halfOpen map[string]map[outgoingConnAttemptKey]*PeerInfo

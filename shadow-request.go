@@ -135,7 +135,7 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 // (otherwise a cancel burst fills maxShadowInFlight and EndgamePiece
 // returns 0 while the playhead is starved). Received chunks do not count.
 func (t *Torrent) shadowInFlightLocked() int {
-	t.expireCancelledShadowsLocked()
+	t.maybeExpireCancelledShadowsLocked()
 	n := 0
 	for pc := range t.conns {
 		for ri, e := range pc.shadowRequests {

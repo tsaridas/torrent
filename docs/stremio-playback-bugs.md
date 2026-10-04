@@ -45,9 +45,10 @@ server. Status is relative to this branch.
 - Cold file-head endgame is **peer-budget whole-piece** by default (app
   `endgameEvery=200ms`; A/B-off restores 32×6); mid-file verified stays
   on `EndgamePiece` (**16×2** either way). One EndgamePiece pass per
-  torrent per 200ms; `liveShadowCount` keeps room O(1). Probe-tail uses
-  `NoShadow` (Now boost, no duplicates) so it does not share the shadow
-  budget with the cold head.
+  **piece** per 150ms (below the app's ~180ms gate); `liveShadowCount`
+  keeps room O(1). Cancelled-stub expiry is at most once/second.
+  Probe-tail uses `NoShadow` (Now boost, no duplicates) so it does not
+  share the shadow budget with the cold head.
 - `cancelShadowCopies` sends cancel but **keeps** validReceiveChunks +
   shadow flag until arrival/Reject/`shadowCancelExpire` (30s). Clearing
   first dropped fast peers; counting cancelled stubs filled the budget

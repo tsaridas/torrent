@@ -82,8 +82,8 @@ type (
 		// but not in requestState, so the tracked holder keeps its request.
 		// See shadowEntry: sent while live; cancelled set by cancelShadowCopies
 		// (kept until arrival, Reject, or shadowCancelExpire). Caps depend on
-		// ClientConfig.EndgamePeerBudget (per-peer room) or maxChunks×perChunk
-		// plus maxShadowInFlight.
+		// the EndgamePiece / ShadowRequestAhead caller's maxChunks×perChunk
+		// (maxChunks<=0 ⇒ per-peer room for the whole piece).
 		shadowRequests map[RequestIndex]shadowEntry
 		// liveShadowCount is the number of live (not cancelled) entries in
 		// shadowRequests. Maintained by shadowRequestOne / clearShadowFlag /

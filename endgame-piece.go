@@ -2,10 +2,12 @@ package torrent
 
 import "time"
 
-// endgameTorrentInterval is the minimum gap between EndgamePiece peer-loop
-// passes on one torrent. Concurrent Ranges (VLC/Android open many on piece 0)
-// share a single pass so the client write lock is not held N times per tick.
-const endgameTorrentInterval = 200 * time.Millisecond
+// endgamePieceInterval is the minimum gap between EndgamePiece peer-loop
+// passes on one piece. Below the app's WaitAndRead gate (tickEvery−20ms ≈
+// 180ms for endgameEvery=200ms) so the fork does not reject the loop's own
+// cadence. Concurrent Ranges on the same piece share one pass; other pieces
+// keep their own timer so a mid-file reader is not starved by piece 0.
+const endgamePieceInterval = 150 * time.Millisecond
 
 // EndgamePiece asks additional peers for still-missing chunks of piece pi at
 // or after torrent byte offset off, when that piece is PiecePriorityNow.
@@ -17,39 +19,30 @@ const endgameTorrentInterval = 200 * time.Millisecond
 // multi-file title that begins mid-piece does not duplicate the previous
 // file's leading chunks. Negative off is treated as the piece start.
 //
-// When maxChunks<=0 (or ClientConfig.EndgamePeerBudget with maxChunks<=0),
-// each peer may take duplicates only up to its own request-queue room
-// (PeerMaxRequests minus outstanding requests and live shadows);
-// maxChunks<=0 covers the whole remaining piece; maxShadowInFlight and
-// perChunk are not applied. A live shadow older than shadowSilentAge does
-// not block asking other peers. maxChunks<=0 always selects this shape so a
-// stream/engine settings disagree cannot make EndgamePiece a silent no-op.
-//
-// Otherwise (capped / A/B off): up to perChunk peers for each of the first
-// maxChunks missing chunks, bounded by maxShadowInFlight.
+// Shape is chosen by the caller's maxChunks/perChunk (not ClientConfig):
+// maxChunks<=0 fills each peer up to its request-queue room for the whole
+// remaining piece; positive caps use perChunk and maxShadowInFlight.
+// A live shadow older than shadowSilentAge does not block asking other peers.
 //
 // Same wire accounting as ShadowRequestAhead (via shadowRequestOne):
 // requestState untouched so the tracked holder keeps its request. A second
 // copy is dropped as redundant. Candidates are unchoked peers that have the
 // piece, fastest first. No-ops when the piece is not Now, is complete, or has
 // no missing chunks. A not-Now skip increments endgamePieceNotNowSkipsVar.
-// At most one peer-loop pass runs per endgameTorrentInterval per torrent.
+// At most one peer-loop pass runs per endgamePieceInterval per piece.
 func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int) int {
 	if pi < 0 {
 		return 0
 	}
 	// Whole-piece fill is selected by maxChunks<=0 (stream peer-budget path).
-	// That shape always uses per-peer room so a ClientConfig.EndgamePeerBudget
-	// left at the Go zero value cannot make EndgamePiece a silent no-op.
-	// Positive maxChunks×perChunk stays capped (mid-file 16×2, A/B-off 32×6)
-	// even when the config flag is on.
+	// Positive maxChunks×perChunk stays capped (mid-file 16×2, A/B-off 32×6).
 	peerBudget := maxChunks <= 0
 	if !peerBudget && perChunk <= 0 {
 		return 0
 	}
 	t.cl.lock()
 	defer t.cl.unlock()
-	t.expireCancelledShadowsLocked()
+	t.maybeExpireCancelledShadowsLocked()
 	if !t.haveInfo() || int(pi) >= t.numPieces() {
 		return 0
 	}
@@ -61,7 +54,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		torrent.Add(endgamePieceNotNowSkipsVar, 1)
 		return 0
 	}
-	if !t.lastEndgameAt.IsZero() && time.Since(t.lastEndgameAt) < endgameTorrentInterval {
+	if at, ok := t.lastEndgameAtByPiece[pi]; ok && time.Since(at) < endgamePieceInterval {
 		return 0
 	}
 	nChunks := p.numChunks()
@@ -98,7 +91,10 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		return 0
 	}
 	t.sortShadowPeers(peers)
-	t.lastEndgameAt = time.Now()
+	if t.lastEndgameAtByPiece == nil {
+		t.lastEndgameAtByPiece = make(map[pieceIndex]time.Time)
+	}
+	t.lastEndgameAtByPiece[pi] = time.Now()
 
 	chunkLimit := maxChunks
 	if peerBudget {

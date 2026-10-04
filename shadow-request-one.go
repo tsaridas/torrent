@@ -16,6 +16,12 @@ func (e shadowEntry) live() bool { return e.cancelled.IsZero() }
 // peers. The expectation stays for disconnect safety.
 const shadowSilentAge = 500 * time.Millisecond
 
+// shadowExpireInterval is how often expireCancelledShadowsLocked may walk all
+// conns. cancelShadowCopies runs per received chunk; without this throttle a
+// cold-start endgame with thousands of stubs would re-scan them under the
+// client lock on every chunk.
+const shadowExpireInterval = time.Second
+
 // shadowRequestOne sends a duplicate request for ri on pc without touching
 // requestState. The block is accepted when it arrives (validReceiveChunks);
 // receiveChunk treats a second copy as redundant and cancels the tracked
@@ -103,11 +109,12 @@ func (p *Peer) dropAllShadowRequests() {
 
 // expireCancelledShadowsLocked drops cancelled stubs older than
 // shadowCancelExpire. Budget-mode EndgamePiece never calls
-// shadowInFlightLocked, so expiry must run here (and from
-// cancelShadowCopies) or silent-cancel peers keep stubs forever and
+// shadowInFlightLocked, so expiry must run from cancelShadowCopies /
+// EndgamePiece or silent-cancel peers keep stubs forever and
 // numShadowRequests never returns to 0.
 func (t *Torrent) expireCancelledShadowsLocked() {
 	now := time.Now()
+	t.lastShadowExpire = now
 	for pc := range t.conns {
 		for ri, e := range pc.shadowRequests {
 			if e.live() {
@@ -120,6 +127,15 @@ func (t *Torrent) expireCancelledShadowsLocked() {
 	}
 }
 
+// maybeExpireCancelledShadowsLocked runs expireCancelledShadowsLocked at most
+// once per shadowExpireInterval.
+func (t *Torrent) maybeExpireCancelledShadowsLocked() {
+	if !t.lastShadowExpire.IsZero() && time.Since(t.lastShadowExpire) < shadowExpireInterval {
+		return
+	}
+	t.expireCancelledShadowsLocked()
+}
+
 // cancelShadowCopies tells losing peers to stop sending a chunk that already
 // arrived. Keep validReceiveChunks and the shadow flag until the in-flight
 // copy or Reject lands -- Peer.cancel does the same for tracked requests.
@@ -128,7 +144,10 @@ func (t *Torrent) expireCancelledShadowsLocked() {
 // silently (no fast extension, old Transmission) keep the entry until
 // shadowCancelExpire so they do not permanently fill maxShadowInFlight.
 func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
-	t.expireCancelledShadowsLocked()
+	if t.numShadowRequests == 0 {
+		return
+	}
+	t.maybeExpireCancelledShadowsLocked()
 	if t.numShadowRequests == 0 {
 		return
 	}

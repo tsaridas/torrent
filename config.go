@@ -268,12 +268,11 @@ type ClientConfig struct {
 	// requests at a time stays near a handful in flight however fast it is.
 	// Untested peers are unaffected; see NowPriorityRestrictedPeerRequests.
 	TorrentStreamPipeline bool
-	// EndgamePeerBudget makes EndgamePiece fill each peer up to its own
-	// request-queue room (PeerMaxRequests minus outstanding requests and live
-	// shadows) instead of fixed maxChunks×perChunk and maxShadowInFlight.
-	// maxChunks<=0 means the whole remaining piece. Silent live shadows older
-	// than shadowSilentAge do not block asking other peers. Off restores the
-	// capped shape for A/B.
+	// EndgamePeerBudget is retained for the Stremio app / A/B wiring
+	// (STREMIOSRV_ENDGAME_PEER_BUDGET). EndgamePiece itself does not read it:
+	// the caller's maxChunks<=0 selects whole-piece per-peer room, and
+	// positive maxChunks×perChunk selects the capped shape. The app sets this
+	// flag and passes matching caps from WaitAndRead.
 	EndgamePeerBudget bool
 	// ShadowPeerOrder, when all candidate download rates are 0, orders peers
 	// by whether they have delivered anything, then by whether they have all

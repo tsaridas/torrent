@@ -165,6 +165,8 @@ func TestShadowInFlightIgnoresReceivedAndExpiresCancel(t *testing.T) {
 	e := a.shadowRequests[ri]
 	e.cancelled = e.cancelled.Add(-shadowCancelExpire - time.Second)
 	a.shadowRequests[ri] = e
+	// shadowInFlightLocked's expire sweep is rate-limited.
+	tor.lastShadowExpire = time.Time{}
 	qt.Check(t, qt.Equals(tor.shadowInFlightLocked(), 0))
 	_, still = a.shadowRequests[ri]
 	qt.Check(t, qt.IsFalse(still))
@@ -264,9 +266,9 @@ func TestEndgamePeerBudgetWholePieceAndRoom(t *testing.T) {
 	// Clear b so only a would be asked; a is full.
 	b.dropAllShadowRequests()
 	b.validReceiveChunks = nil
-	// Allow another pass (one endgame per endgameTorrentInterval otherwise).
+	// Allow another pass (one endgame per endgamePieceInterval otherwise).
 	tor.cl.lock()
-	tor.lastEndgameAt = time.Time{}
+	delete(tor.lastEndgameAtByPiece, 0)
 	tor.cl.unlock()
 	// a already has 3 live shadows and max 3 → room 0; b can take the piece again.
 	sent = tor.EndgamePiece(0, 0, 0, 0)
@@ -279,13 +281,26 @@ func TestEndgamePieceOnePassPerInterval(t *testing.T) {
 	tor.piece(0).SetPriorityNow()
 	endgameTestPeers(t, tor)
 	qt.Check(t, qt.Equals(tor.EndgamePiece(0, 0, 2, 2), 4))
-	// Immediate second call is throttled even though peers could take more.
+	// Immediate second call on the same piece is throttled.
 	qt.Check(t, qt.Equals(tor.EndgamePiece(0, 0, 2, 2), 0))
 	tor.cl.lock()
-	tor.lastEndgameAt = time.Now().Add(-endgameTorrentInterval)
+	tor.lastEndgameAtByPiece[0] = time.Now().Add(-endgamePieceInterval)
 	tor.cl.unlock()
 	// After the interval, a call that finds nothing new still runs the loop.
 	qt.Check(t, qt.Equals(tor.EndgamePiece(0, 0, 2, 2), 0))
+}
+
+func TestEndgamePieceThrottleIsPerPiece(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	tor.piece(1).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	for _, pc := range []*PeerConn{a, b} {
+		pc._peerPieces.Add(1)
+	}
+	qt.Check(t, qt.IsTrue(tor.EndgamePiece(0, 0, 2, 2) > 0))
+	// Piece 1 must not be starved by piece 0's recent pass.
+	qt.Check(t, qt.IsTrue(tor.EndgamePiece(1, 5, 2, 2) > 0))
 }
 
 func TestExpireCancelledShadowsFromCancelCopies(t *testing.T) {
@@ -301,11 +316,29 @@ func TestExpireCancelledShadowsFromCancelCopies(t *testing.T) {
 	e := a.shadowRequests[ri]
 	e.cancelled = e.cancelled.Add(-shadowCancelExpire - time.Second)
 	a.shadowRequests[ri] = e
-	// Budget mode never calls shadowInFlightLocked; cancelShadowCopies must expire.
+	// Sweep is rate-limited; force the next cancelShadowCopies to expire.
+	tor.lastShadowExpire = time.Time{}
 	tor.cancelShadowCopies(ri+1, &b.Peer)
 	_, still := a.shadowRequests[ri]
 	qt.Check(t, qt.IsFalse(still))
 	qt.Check(t, qt.Equals(tor.numShadowRequests, 0))
+}
+
+func TestExpireCancelledShadowsThrottled(t *testing.T) {
+	tor := greetingTorrent(t)
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	defer tor.cl.unlock()
+	ri := tor.pieceRequestIndexOffset(0)
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	tor.cancelShadowCopies(ri, &b.Peer)
+	e := a.shadowRequests[ri]
+	e.cancelled = e.cancelled.Add(-shadowCancelExpire - time.Second)
+	a.shadowRequests[ri] = e
+	// Within shadowExpireInterval the aged stub must not be swept again.
+	tor.cancelShadowCopies(ri+1, &b.Peer)
+	_, still := a.shadowRequests[ri]
+	qt.Check(t, qt.IsTrue(still), qt.Commentf("expire must be throttled per received chunk"))
 }
 
 func TestEndgameSilentShadowFreesPerChunkSlot(t *testing.T) {
