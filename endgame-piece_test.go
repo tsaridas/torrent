@@ -139,6 +139,33 @@ func TestCancelShadowCopiesKeepsExpectation(t *testing.T) {
 	tor.cl.unlock()
 }
 
+// cancelShadowCopies reaches holders through t.shadowHolders, so the index
+// must follow every add and drop: a stale entry would cancel on a peer that
+// no longer holds the shadow, a missing one would leave a duplicate running.
+func TestShadowHoldersIndexTracksEntries(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, b := endgameTestPeers(t, tor)
+	tor.cl.lock()
+	defer tor.cl.unlock()
+	ri := tor.pieceRequestIndexOffset(0)
+	qt.Assert(t, qt.IsTrue(a.shadowRequestOne(ri)))
+	qt.Assert(t, qt.IsTrue(b.shadowRequestOne(ri)))
+	qt.Check(t, qt.HasLen(tor.shadowHolders[ri], 2))
+	// The winner keeps its entry; the loser is cancelled but stays indexed
+	// until its copy, a Reject, or expiry lands.
+	tor.cancelShadowCopies(ri, &b.Peer)
+	qt.Check(t, qt.IsFalse(a.shadowRequests[ri].cancelled.IsZero()))
+	qt.Check(t, qt.IsTrue(b.shadowRequests[ri].cancelled.IsZero()))
+	qt.Check(t, qt.HasLen(tor.shadowHolders[ri], 2))
+	a.dropShadowRequest(ri)
+	qt.Check(t, qt.HasLen(tor.shadowHolders[ri], 1))
+	b.dropAllShadowRequests()
+	_, ok := tor.shadowHolders[ri]
+	qt.Check(t, qt.IsFalse(ok), qt.Commentf("empty holder sets must be deleted"))
+	qt.Check(t, qt.Equals(tor.numShadowRequests, 0))
+}
+
 func TestShadowInFlightIgnoresReceivedAndExpiresCancel(t *testing.T) {
 	tor := greetingTorrent(t)
 	tor.piece(0).SetPriorityNow()

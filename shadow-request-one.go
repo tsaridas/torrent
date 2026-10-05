@@ -42,6 +42,7 @@ func (pc *PeerConn) shadowRequestOne(ri RequestIndex) bool {
 	pc.liveShadowCount++
 	if pc.t != nil {
 		pc.t.numShadowRequests++
+		pc.t.addShadowHolder(ri, &pc.Peer)
 	}
 	pc._request(pc.t.requestIndexToRequest(ri))
 	return true
@@ -88,10 +89,36 @@ func (p *Peer) clearShadowFlag(ri RequestIndex) bool {
 		p.liveShadowCount--
 	}
 	delete(p.shadowRequests, ri)
-	if p.t != nil && p.t.numShadowRequests > 0 {
-		p.t.numShadowRequests--
+	if p.t != nil {
+		if p.t.numShadowRequests > 0 {
+			p.t.numShadowRequests--
+		}
+		p.t.removeShadowHolder(ri, p)
 	}
 	return true
+}
+
+func (t *Torrent) addShadowHolder(ri RequestIndex, p *Peer) {
+	if t.shadowHolders == nil {
+		t.shadowHolders = make(map[RequestIndex]map[*Peer]struct{})
+	}
+	m := t.shadowHolders[ri]
+	if m == nil {
+		m = make(map[*Peer]struct{}, 2)
+		t.shadowHolders[ri] = m
+	}
+	m[p] = struct{}{}
+}
+
+func (t *Torrent) removeShadowHolder(ri RequestIndex, p *Peer) {
+	m := t.shadowHolders[ri]
+	if m == nil {
+		return
+	}
+	delete(m, p)
+	if len(m) == 0 {
+		delete(t.shadowHolders, ri)
+	}
 }
 
 func (p *Peer) dropShadowRequest(ri RequestIndex) {
@@ -151,12 +178,17 @@ func (t *Torrent) cancelShadowCopies(ri RequestIndex, winner *Peer) {
 	if t.numShadowRequests == 0 {
 		return
 	}
+	holders := t.shadowHolders[ri]
+	if len(holders) == 0 {
+		return
+	}
 	now := time.Now()
-	for pc := range t.conns {
-		if pc.closed.IsSet() {
+	for p := range holders {
+		if p == winner {
 			continue
 		}
-		if winner != nil && &pc.Peer == winner {
+		pc, ok := p.TryAsPeerConn()
+		if !ok || pc.closed.IsSet() {
 			continue
 		}
 		e, ok := pc.shadowRequests[ri]

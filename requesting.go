@@ -389,6 +389,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			// Steal a request that leaves us with one more request than the existing peer
 			// connection if the stealer more recently received a chunk.
 			allowSteal := diff <= 1 && (diff < 1 || p.lastUsefulChunkReceived.After(existing.lastUsefulChunkReceived))
+			var speedSteal *NowPriorityStealEvent
 			if !allowSteal && t.pieceIsNowPriority(req) {
 				// Speed-based override, scoped to pieces needed for immediate
 				// playback (PiecePriorityNow) only: the count-based check above
@@ -423,16 +424,14 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 						int64(existing.uncancelledRequests()),
 					)
 				}
-				if allowSteal {
-					for _, f := range cfg.Callbacks.NowPriorityStealBySpeed {
-						f(NowPriorityStealEvent{
-							Torrent:      t,
-							Piece:        t.pieceIndexOfRequestIndex(req),
-							Stealer:      p,
-							Existing:     existing,
-							StealerRate:  stealerRate,
-							ExistingRate: existingRate,
-						})
+				if allowSteal && len(cfg.Callbacks.NowPriorityStealBySpeed) > 0 {
+					speedSteal = &NowPriorityStealEvent{
+						Torrent:      t,
+						Piece:        t.pieceIndexOfRequestIndex(req),
+						Stealer:      p,
+						Existing:     existing,
+						StealerRate:  stealerRate,
+						ExistingRate: existingRate,
 					}
 				}
 			}
@@ -444,6 +443,12 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			// on the wire; see ClientConfig.StealRequestGrace.
 			if !t.stealRequestGraceElapsed(req) {
 				continue
+			}
+			// Report only steals that happen: grace can still veto above.
+			if speedSteal != nil {
+				for _, f := range t.cl.config.Callbacks.NowPriorityStealBySpeed {
+					f(*speedSteal)
+				}
 			}
 			t.cancelRequest(req)
 		}

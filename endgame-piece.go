@@ -209,7 +209,7 @@ func (t *Torrent) CountFreshNowPeers() int {
 		if pc.closed.IsSet() {
 			continue
 		}
-		if pc.peakRequests != 0 {
+		if pc.peakRequests != 0 || pc.peerChoking {
 			continue
 		}
 		if pc.hasWantedNowPriorityPiece() {

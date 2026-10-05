@@ -113,6 +113,12 @@ type Torrent struct {
 	// Outstanding shadowRequests across conns (live or cancelled-pending).
 	// cancelShadowCopies returns early when this is 0.
 	numShadowRequests int
+	// shadowHolders indexes shadowRequests by chunk: the peers holding a
+	// shadow entry (live or cancelled-pending) for each RequestIndex.
+	// cancelShadowCopies runs per received chunk under the client lock;
+	// walking every conn there cost ~150 map lookups per chunk at full
+	// speed whenever any shadow was outstanding, which is most of a stream.
+	shadowHolders map[RequestIndex]map[*Peer]struct{}
 	// shadowPeerRotate advances each sortShadowPeers cold-start tie-break so
 	// successive EndgamePiece / ShadowRequestAhead ticks do not always prefer
 	// the same map-iteration peer when every downloadRate is 0.

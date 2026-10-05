@@ -27,3 +27,16 @@ func TestHasWantedNowUsesBitmapWhenEnabled(t *testing.T) {
 	qt.Check(t, qt.IsFalse(a.hasWantedNowPriorityPiece()))
 	tor.cl.unlock()
 }
+
+// CountFreshNowPeers is the probe's "fresh peers holding Now at 1s" metric;
+// a peer still choking us cannot serve those pieces and must not count.
+func TestCountFreshNowPeersSkipsChoking(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+	a, _ := endgameTestPeers(t, tor)
+	qt.Check(t, qt.Equals(tor.CountFreshNowPeers(), 2))
+	tor.cl.lock()
+	a.peerChoking = true
+	tor.cl.unlock()
+	qt.Check(t, qt.Equals(tor.CountFreshNowPeers(), 1))
+}
