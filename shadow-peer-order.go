@@ -50,8 +50,8 @@ func (t *Torrent) sortShadowPeers(peers []shadowPeerCand) {
 	t.shadowPeerRotate++
 	for i := 0; i < len(peers); {
 		j := i + 1
+		ai, aj := shadowPeerTier(peers[i].pc)
 		for j < len(peers) {
-			ai, aj := shadowPeerTier(peers[i].pc)
 			bi, bj := shadowPeerTier(peers[j].pc)
 			if ai != bi || aj != bj {
 				break

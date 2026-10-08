@@ -34,7 +34,7 @@ func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 		return 0
 	}
 	pieceLen := int64(t.info.PieceLength)
-	total := t.info.TotalLength()
+	total := t.length()
 	chunkSize := int64(t.chunkSize)
 	if pieceLen <= 0 || chunkSize <= 0 {
 		return 0
@@ -43,6 +43,9 @@ func (t *Torrent) ReadableUnverifiedLen(off, max int64) int64 {
 	for n < max && off+n < total {
 		pos := off + n
 		pi := pieceIndex(pos / pieceLen)
+		if int(pi) >= t.numPieces() {
+			break
+		}
 		pieceStart := int64(pi) * pieceLen
 		pieceEnd := pieceStart + int64(t.pieceLength(pi))
 		// v2/hybrid piece-aligned files can make pieceLength shorter than

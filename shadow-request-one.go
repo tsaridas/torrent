@@ -31,6 +31,9 @@ func (pc *PeerConn) shadowRequestOne(ri RequestIndex) bool {
 	if pc.validReceiveChunks[ri] > 0 {
 		return false
 	}
+	if pc.shadowPeerRoom() <= 0 {
+		return false
+	}
 	if pc.validReceiveChunks == nil {
 		pc.validReceiveChunks = make(map[RequestIndex]int)
 	}

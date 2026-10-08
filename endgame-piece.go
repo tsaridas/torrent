@@ -82,7 +82,7 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 		if !pc.peerHasPiece(pi) || (pc.peerChoking && !pc.peerAllowedFast.Contains(pi)) {
 			continue
 		}
-		if peerBudget && pc.shadowPeerRoom() <= 0 {
+		if pc.shadowPeerRoom() <= 0 {
 			continue
 		}
 		peers = append(peers, shadowPeerCand{pc, pc.downloadRate()})
@@ -138,8 +138,8 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 				i++
 				continue
 			}
-			if peerBudget && pc.shadowPeerRoom() <= 0 {
-				peers[i] = peers[len(peers)-1]
+			if pc.shadowPeerRoom() <= 0 {
+				copy(peers[i:], peers[i+1:])
 				peers = peers[:len(peers)-1]
 				continue
 			}
@@ -173,8 +173,9 @@ func (t *Torrent) EndgamePiece(pi pieceIndex, off int64, maxChunks, perChunk int
 			sent++
 			if !peerBudget {
 				inFlight++
-			} else if pc.shadowPeerRoom() <= 0 {
-				peers[i] = peers[len(peers)-1]
+			}
+			if pc.shadowPeerRoom() <= 0 {
+				copy(peers[i:], peers[i+1:])
 				peers = peers[:len(peers)-1]
 				continue
 			}

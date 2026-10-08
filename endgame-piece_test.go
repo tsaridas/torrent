@@ -386,3 +386,47 @@ func TestEndgameSilentShadowFreesPerChunkSlot(t *testing.T) {
 	_, onB := b.shadowRequests[ri]
 	qt.Check(t, qt.IsTrue(onB))
 }
+
+func endgameTestPeerWithRate(t *testing.T, tor *Torrent, port int, id byte, rate float64, maxReq int) *PeerConn {
+	t.Helper()
+	addr := &net.TCPAddr{IP: net.IPv6loopback, Port: port}
+	c := tor.cl.newConnection(nil, newConnectionOpts{
+		remoteAddr: addr,
+		network:    addr.Network(),
+	})
+	c.PeerID[0] = id
+	c.initMessageWriter()
+	c.peerChoking = false
+	c._peerPieces.Add(0)
+	c.setTorrent(tor)
+	tor.cl.lock()
+	err := tor.addPeerConn(c)
+	tor.cl.unlock()
+	qt.Assert(t, qt.IsNil(err))
+	c.PeerMaxRequests = maxRequests(maxReq)
+	c._stats.BytesReadUsefulIntendedData.Add(int64(rate))
+	c.cumulativeExpectedToReceiveChunks = time.Second
+	return c
+}
+
+func TestEndgamePiecePreservesSpeedOrderWhenPeersExhaustRoom(t *testing.T) {
+	tor := greetingTorrent(t)
+	tor.piece(0).SetPriorityNow()
+
+	fast := endgameTestPeerWithRate(t, tor, 4747, 1, 1000, 1)
+	med := endgameTestPeerWithRate(t, tor, 4748, 2, 500, 10)
+	slow := endgameTestPeerWithRate(t, tor, 4749, 3, 100, 10)
+
+	// maxChunks=2, perChunk=1.
+	// Chunk 0: fast is asked, runs out of room (room=0), removed.
+	// Chunk 1: medium must be asked next because it's faster than slow.
+	// With the slice deletion bug (peers[i] = peers[len-1]), slow would have been
+	// swapped into index 0 and asked for chunk 1 instead of med.
+	sent := tor.EndgamePiece(0, 0, 2, 1)
+	qt.Check(t, qt.Equals(sent, 2))
+
+	qt.Check(t, qt.Equals(len(fast.shadowRequests), 1))
+	qt.Check(t, qt.Equals(len(med.shadowRequests), 1))
+	qt.Check(t, qt.Equals(len(slow.shadowRequests), 0))
+}
+

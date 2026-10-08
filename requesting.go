@@ -306,24 +306,29 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 	slowRate := t.cl.config.NowPrioritySlowPeerRate
 	myRate := p.downloadRate()
 	restricted := nowLimit > 0 && peerRestrictedForNowPriority(myRate, slowRate)
-	// The per-piece cap for a restricted peer, cached for this pass. It
-	// mirrors torrent-stream's rank test: while a faster, proven peer holds
-	// the piece, a proven slow peer takes none of it (rank returns false and
-	// the wire goes elsewhere) and an untested peer gets its single proving
-	// request. With no better holder, an untested peer gets nowLimit and a
-	// proven slow peer is not restricted at all, so a sole slow seeder keeps
-	// the download moving. See restrictedNowCap.
+	// The cap for a restricted peer when requesting this piece, cached for
+	// this pass. It mirrors torrent-stream's rank test: while a faster, proven
+	// peer holds the piece, a proven slow peer takes none of it (rank returns
+	// false and the wire goes elsewhere) and an untested peer gets its single
+	// proving request. With no better holder, an untested peer gets nowLimit
+	// and a proven slow peer is not restricted at all, so a sole slow seeder
+	// keeps the download moving. Evaluated per piece, and compared against
+	// nowHeld across all now-priority pieces. See restrictedNowCap.
 	pieceCap := map[pieceIndex]int{}
 	nowCapFor := func(piece pieceIndex) int {
 		if c, ok := pieceCap[piece]; ok {
 			return c
 		}
 		better := false
-		t.iterPeers(func(q *Peer) {
-			if better || q == p || q.peerChoking || !q.peerHasPiece(piece) {
-				return
+		t.iterPeersWhile(func(q *Peer) bool {
+			if q == p || q.peerChoking || !q.peerHasPiece(piece) {
+				return true
 			}
-			better = fasterHolderAvailable(myRate, q.downloadRate(), slowRate)
+			if fasterHolderAvailable(myRate, q.downloadRate(), slowRate) {
+				better = true
+				return false
+			}
+			return true
 		})
 		c := restrictedNowCap(better, myRate, nowLimit)
 		pieceCap[piece] = c
@@ -619,10 +624,10 @@ func nowPriorityRequestOverdue(
 // for a peer that has delivered nothing, so an untested peer is always
 // restricted; a proven one is restricted while it runs below slowRate.
 // slowRate <= 0 restricts only untested peers.
-// restrictedNowCap is how many now-priority requests a restricted peer may
-// hold on one piece; -1 means no cap. better reports whether a faster, proven
-// peer holds the piece (fasterHolderAvailable). See nowCapFor in
-// applyRequestState.
+// restrictedNowCap is the maximum number of now-priority requests a restricted
+// peer may hold across the torrent when considering piece; -1 means no cap.
+// better reports whether a faster, proven peer holds the piece
+// (fasterHolderAvailable). See nowCapFor in applyRequestState.
 //
 // An untested peer always keeps one request, even beside a better holder:
 // torrent-stream gives every untested wire exactly one request, and

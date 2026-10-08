@@ -12,14 +12,15 @@ import (
 type prioritizedPeersItem struct {
 	prio peerPriority
 	p    PeerInfo
+	hash int64
 }
 
 var hashSeed = maphash.MakeSeed()
 
-func (me prioritizedPeersItem) addrHash() int64 {
+func calcAddrHash(key string) int64 {
 	var h maphash.Hash
 	h.SetSeed(hashSeed)
-	h.WriteString(me.p.Addr.String())
+	h.WriteString(key)
 	return int64(h.Sum64())
 }
 
@@ -29,7 +30,7 @@ func (me prioritizedPeersItem) Less(than btree.Item) bool {
 		me.p.Trusted, other.p.Trusted).Int(
 		peerSourceRank(me.p.Source), peerSourceRank(other.p.Source)).Uint32(
 		me.prio, other.prio).Int64(
-		me.addrHash(), other.addrHash(),
+		me.hash, other.hash,
 	).Less()
 }
 
@@ -116,8 +117,8 @@ func (me *prioritizedPeers) Add(p PeerInfo) bool {
 // byAddr; we keep the best (trusted, then source rank, then BEP 40).
 func (me *prioritizedPeers) AddReturningReplacedPeer(p PeerInfo) (ret PeerInfo, ok bool) {
 	me.ensureByAddr()
-	best := prioritizedPeersItem{me.getPrio(p), p}
 	key := peerAddrKey(p)
+	best := prioritizedPeersItem{me.getPrio(p), p, calcAddrHash(key)}
 	if old, exists := me.byAddr[key]; exists {
 		me.om.Delete(old)
 		ok = true
@@ -131,7 +132,7 @@ func (me *prioritizedPeers) AddReturningReplacedPeer(p PeerInfo) (ret PeerInfo, 
 		ret = prev.(prioritizedPeersItem).p
 		me.forget(prev.(prioritizedPeersItem))
 	}
-	me.remember(best)
+	me.byAddr[key] = best
 	return
 }
 

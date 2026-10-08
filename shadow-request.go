@@ -53,7 +53,7 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 		return 0
 	}
 	pieceLen := int64(t.info.PieceLength)
-	total := t.info.TotalLength()
+	total := t.length()
 	chunkSize := int64(t.chunkSize)
 	if pieceLen <= 0 || chunkSize <= 0 {
 		return 0
@@ -61,6 +61,9 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	var conns []shadowPeerCand
 	for pc := range t.conns {
 		if pc.closed.IsSet() {
+			continue
+		}
+		if pc.shadowPeerRoom() <= 0 {
 			continue
 		}
 		conns = append(conns, shadowPeerCand{pc, pc.downloadRate()})
@@ -74,14 +77,34 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 	sent, chunks := 0, 0
 	for pos := off; pos < total && chunks < maxChunks && inFlight < maxShadowInFlight; {
 		pi := pieceIndex(pos / pieceLen)
+		if int(pi) >= t.numPieces() {
+			break
+		}
 		pieceStart := int64(pi) * pieceLen
+		pieceEnd := pieceStart + int64(t.pieceLength(pi))
+		if pieceEnd <= pos {
+			nextPiecePos := pieceStart + pieceLen
+			if nextPiecePos <= pos {
+				break
+			}
+			pos = nextPiecePos
+			continue
+		}
 		if t.pieceComplete(pi) {
-			pos = pieceStart + int64(t.pieceLength(pi))
+			pos = pieceEnd
 			continue
 		}
 		p := t.piece(pi)
 		ci := chunkIndexType((pos - pieceStart) / chunkSize)
-		pos = pieceStart + (int64(ci)+1)*chunkSize
+		if ci >= p.numChunks() {
+			pos = pieceEnd
+			continue
+		}
+		chunkEnd := pieceStart + (int64(ci)+1)*chunkSize
+		if chunkEnd > pieceEnd {
+			chunkEnd = pieceEnd
+		}
+		pos = chunkEnd
 		if p.chunkIndexDirty(ci) {
 			continue
 		}
@@ -95,6 +118,9 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 			}
 			pc := c.pc
 			if &pc.Peer == holder || !pc.peerHasPiece(pi) || pc.peerChoking && !pc.peerAllowedFast.Contains(pi) {
+				continue
+			}
+			if pc.shadowPeerRoom() <= 0 {
 				continue
 			}
 			if live, cancelled, silent := pc.shadowSlot(ri); live {

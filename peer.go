@@ -457,6 +457,9 @@ func (cn *Peer) hasWantedNowPriorityPiece() bool {
 		return false
 	}
 	if t.cl != nil && t.cl.config.NowPieceBitmap {
+		if all, known := cn.peerHasAllPieces(); all && known {
+			return !t._nowPriorityPieces.IsEmpty()
+		}
 		found := false
 		t._nowPriorityPieces.Iterate(func(i uint32) bool {
 			pi := pieceIndex(i)

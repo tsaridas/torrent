@@ -2896,13 +2896,24 @@ func (t *Torrent) SetOnWriteChunkError(f func(error)) {
 	t.userOnWriteChunkErr = f
 }
 
-func (t *Torrent) iterPeers(f func(p *Peer)) {
+func (t *Torrent) iterPeersWhile(f func(p *Peer) bool) {
 	for pc := range t.conns {
-		f(&pc.Peer)
+		if !f(&pc.Peer) {
+			return
+		}
 	}
 	for _, ws := range t.webSeeds {
-		f(ws)
+		if !f(ws) {
+			return
+		}
 	}
+}
+
+func (t *Torrent) iterPeers(f func(p *Peer)) {
+	t.iterPeersWhile(func(p *Peer) bool {
+		f(p)
+		return true
+	})
 }
 
 func (t *Torrent) callbacks() *Callbacks {
@@ -2988,10 +2999,12 @@ func (t *Torrent) addWebSeed(url string, opts ...AddWebSeedsOpt) {
 }
 
 func (t *Torrent) peerIsActive(p *Peer) (active bool) {
-	t.iterPeers(func(p1 *Peer) {
+	t.iterPeersWhile(func(p1 *Peer) bool {
 		if p1 == p {
 			active = true
+			return false
 		}
+		return true
 	})
 	return
 }
