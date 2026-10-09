@@ -78,6 +78,8 @@ type Torrent struct {
 	pieceRequestOrder []int
 	// Values are the piece indices that changed.
 	pieceStateChanges pubsub.PubSub[PieceStateChange]
+	// chunkWrites emits when a received chunk write to storage completes.
+	chunkWrites pubsub.PubSub[ChunkWritten]
 	// The size of chunks to request from peers over the wire. This is
 	// normally 16KiB by convention these days.
 	chunkSize pp.Integer
@@ -1086,6 +1088,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 	t.pex.Reset()
 	t.cl.event.Broadcast()
 	t.pieceStateChanges.Close()
+	t.chunkWrites.Close()
 	t.updateWantPeersEvent()
 	return
 }
@@ -1410,6 +1413,21 @@ func (t *Torrent) publishPieceStateChange(piece pieceIndex) {
 				cur,
 			})
 		}
+	})
+}
+
+// ChunkWritten reports that a received chunk was successfully written to storage
+// and is tracked in writtenChunks for unverified reads.
+type ChunkWritten struct {
+	Piece   int
+	Begin   int64
+	Length  int
+	Request RequestIndex
+}
+
+func (t *Torrent) publishChunkWritten(event ChunkWritten) {
+	t.cl._mu.Defer(func() {
+		t.chunkWrites.Publish(event)
 	})
 }
 
