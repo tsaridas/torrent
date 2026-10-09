@@ -122,16 +122,21 @@ func (t *Torrent) SubscribePieceStateChanges() *pubsub.Subscription[PieceStateCh
 	return t.pieceStateChanges.Subscribe()
 }
 
+// ChunkWriteSubscription wraps a pubsub.Subscription to decrement chunkWritesSubs
+// on Close(). Values yields ChunkWritten events.
 type ChunkWriteSubscription struct {
-	*pubsub.Subscription[ChunkWritten]
-	t    *Torrent
-	once sync.Once
+	Values <-chan ChunkWritten
+	sub    *pubsub.Subscription[ChunkWritten]
+	t      *Torrent
+	once   sync.Once
 }
 
+// Close unsubscribes from chunk-write events and decrements the torrent's
+// active subscriber counter. Safe to call multiple times concurrently.
 func (s *ChunkWriteSubscription) Close() {
 	s.once.Do(func() {
 		s.t.chunkWritesSubs.Add(-1)
-		s.Subscription.Close()
+		s.sub.Close()
 	})
 }
 
@@ -139,9 +144,11 @@ func (s *ChunkWriteSubscription) Close() {
 // whenever a chunk write to storage has completed and is tracked in writtenChunks.
 func (t *Torrent) SubscribeChunkWrites() *ChunkWriteSubscription {
 	t.chunkWritesSubs.Add(1)
+	sub := t.chunkWrites.Subscribe()
 	return &ChunkWriteSubscription{
-		Subscription: t.chunkWrites.Subscribe(),
-		t:            t,
+		Values: sub.Values,
+		sub:    sub,
+		t:      t,
 	}
 }
 
