@@ -879,12 +879,6 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 	// while the write was in flight re-pends it, and the bytes are stale.
 	if ci := chunkIndexFromChunkSpec(ppReq.ChunkSpec, t.chunkSize); piece.chunkIndexDirty(ci) {
 		t.writtenChunks.Add(req)
-		t.publishChunkWritten(ChunkWritten{
-			Piece:   int(ppReq.Index),
-			Begin:   int64(ppReq.Begin),
-			Length:  int(ppReq.Length),
-			Request: req,
-		})
 	}
 
 	c.onDirtiedPiece(pieceIndex(ppReq.Index))

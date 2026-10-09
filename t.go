@@ -122,12 +122,6 @@ func (t *Torrent) SubscribePieceStateChanges() *pubsub.Subscription[PieceStateCh
 	return t.pieceStateChanges.Subscribe()
 }
 
-// SubscribeChunkWrites returns a subscription that emits ChunkWritten events
-// whenever a chunk write to storage has completed and is tracked in writtenChunks.
-func (t *Torrent) SubscribeChunkWrites() *pubsub.Subscription[ChunkWritten] {
-	return t.chunkWrites.Subscribe()
-}
-
 // Returns true if the torrent is currently being seeded. This occurs when the
 // client is willing to upload without wanting anything in return.
 func (t *Torrent) Seeding() (ret bool) {

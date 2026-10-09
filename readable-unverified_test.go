@@ -3,7 +3,6 @@ package torrent
 import (
 	"os"
 	"testing"
-	"time"
 
 	qt "github.com/go-quicktest/qt"
 
@@ -85,31 +84,6 @@ func TestPendChunkIndexClearsWritten(t *testing.T) {
 	tor.cl.unlock()
 	qt.Check(t, qt.Equals(tor.ReadableUnverifiedLen(0, 100), int64(0)))
 	qt.Check(t, qt.Equals(tor.ReadableUnverifiedLen(2, 100), int64(2)))
-}
-
-func TestSubscribeChunkWrites(t *testing.T) {
-	tor := greetingTorrent(t)
-	sub := tor.SubscribeChunkWrites()
-	defer sub.Close()
-
-	tor.cl.lock()
-	tor.publishChunkWritten(ChunkWritten{
-		Piece:   0,
-		Begin:   0,
-		Length:  2,
-		Request: 0,
-	})
-	tor.cl.unlock()
-
-	select {
-	case ev := <-sub.Values:
-		qt.Check(t, qt.Equals(ev.Piece, 0))
-		qt.Check(t, qt.Equals(ev.Begin, int64(0)))
-		qt.Check(t, qt.Equals(ev.Length, 2))
-		qt.Check(t, qt.Equals(ev.Request, RequestIndex(0)))
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for chunk write event")
-	}
 }
 
 // Only genuine hash failures count. The initial storage check hashes pieces
