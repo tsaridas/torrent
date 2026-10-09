@@ -89,8 +89,9 @@ func TestPendChunkIndexClearsWritten(t *testing.T) {
 
 func TestSubscribeChunkWrites(t *testing.T) {
 	tor := greetingTorrent(t)
+	qt.Check(t, qt.Equals(tor.chunkWritesSubs.Load(), int32(0)))
 	sub := tor.SubscribeChunkWrites()
-	defer sub.Close()
+	qt.Check(t, qt.Equals(tor.chunkWritesSubs.Load(), int32(1)))
 
 	tor.cl.lock()
 	tor.publishChunkWritten(ChunkWritten{
@@ -110,6 +111,9 @@ func TestSubscribeChunkWrites(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for chunk write event")
 	}
+
+	sub.Close()
+	qt.Check(t, qt.Equals(tor.chunkWritesSubs.Load(), int32(0)))
 }
 
 // Only genuine hash failures count. The initial storage check hashes pieces

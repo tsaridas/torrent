@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"text/tabwriter"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -79,7 +80,8 @@ type Torrent struct {
 	// Values are the piece indices that changed.
 	pieceStateChanges pubsub.PubSub[PieceStateChange]
 	// chunkWrites emits when a received chunk write to storage completes.
-	chunkWrites pubsub.PubSub[ChunkWritten]
+	chunkWrites     pubsub.PubSub[ChunkWritten]
+	chunkWritesSubs atomic.Int32
 	// The size of chunks to request from peers over the wire. This is
 	// normally 16KiB by convention these days.
 	chunkSize pp.Integer
@@ -1426,6 +1428,9 @@ type ChunkWritten struct {
 }
 
 func (t *Torrent) publishChunkWritten(event ChunkWritten) {
+	if t.chunkWritesSubs.Load() <= 0 {
+		return
+	}
 	t.cl._mu.Defer(func() {
 		t.chunkWrites.Publish(event)
 	})
