@@ -78,6 +78,8 @@ type Torrent struct {
 	pieceRequestOrder []int
 	// Values are the piece indices that changed.
 	pieceStateChanges pubsub.PubSub[PieceStateChange]
+	// chunkWrites emits when a received chunk write to storage completes.
+	chunkWrites pubsub.PubSub[ChunkWritten]
 	// The size of chunks to request from peers over the wire. This is
 	// normally 16KiB by convention these days.
 	chunkSize pp.Integer
@@ -1086,6 +1088,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 	t.pex.Reset()
 	t.cl.event.Broadcast()
 	t.pieceStateChanges.Close()
+	t.chunkWrites.Close()
 	t.updateWantPeersEvent()
 	return
 }
@@ -1410,6 +1413,21 @@ func (t *Torrent) publishPieceStateChange(piece pieceIndex) {
 				cur,
 			})
 		}
+	})
+}
+
+// ChunkWritten reports that a received chunk was successfully written to storage
+// and is tracked in writtenChunks for unverified reads.
+type ChunkWritten struct {
+	Piece   int
+	Begin   int64
+	Length  int
+	Request RequestIndex
+}
+
+func (t *Torrent) publishChunkWritten(event ChunkWritten) {
+	t.cl._mu.Defer(func() {
+		t.chunkWrites.Publish(event)
 	})
 }
 
@@ -2896,16 +2914,13 @@ func (t *Torrent) SetOnWriteChunkError(f func(error)) {
 	t.userOnWriteChunkErr = f
 }
 
-func (t *Torrent) iterPeers(f func(p *Peer)) {
 func (t *Torrent) iterPeersWhile(f func(p *Peer) bool) {
 	for pc := range t.conns {
-		f(&pc.Peer)
 		if !f(&pc.Peer) {
 			return
 		}
 	}
 	for _, ws := range t.webSeeds {
-		f(ws)
 		if !f(ws) {
 			return
 		}
@@ -3002,7 +3017,6 @@ func (t *Torrent) addWebSeed(url string, opts ...AddWebSeedsOpt) {
 }
 
 func (t *Torrent) peerIsActive(p *Peer) (active bool) {
-	t.iterPeers(func(p1 *Peer) {
 	t.iterPeersWhile(func(p1 *Peer) bool {
 		if p1 == p {
 			active = true
