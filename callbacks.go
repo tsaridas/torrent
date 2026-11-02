@@ -38,6 +38,18 @@ type Callbacks struct {
 	// Sends status event updates. Useful to inform the user of specific events as they happen,
 	// for logging or to action on.
 	StatusUpdated []func(StatusUpdatedEvent)
+
+	// Fired when a PiecePriorityNow request is stolen via the speed-based override.
+	NowPriorityStealBySpeed []func(NowPriorityStealEvent)
+}
+
+type NowPriorityStealEvent struct {
+	Torrent      *Torrent
+	Piece        int
+	Stealer      *PeerConn
+	Existing     *PeerConn
+	StealerRate  float64
+	ExistingRate float64
 }
 
 type ReceivedUsefulDataEvent = PeerMessageEvent

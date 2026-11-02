@@ -67,8 +67,9 @@ func TestForLoopRepeatItem(t *testing.T) {
 			seen = append(seen, i)
 			if !once && i == 2 {
 				once = true
-				// Can we actually modify the next value of i produced by the range?
-				i-- //nolint:ineffassign // intentional: testing that range ignores mutation
+				// Mutating the range variable must not affect subsequent iterations.
+				i--
+				qt.Assert(t, qt.Equals(i, 1))
 				continue
 			}
 		}

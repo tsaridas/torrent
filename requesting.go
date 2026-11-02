@@ -416,7 +416,31 @@ func (p *PeerConn) applyRequestState(next desiredRequestState) {
 			diff := int64(current.Requests.GetCardinality()) + 1 - (int64(existing.uncancelledRequests()) - 1)
 			// Steal a request that leaves us with one more request than the existing peer
 			// connection if the stealer more recently received a chunk.
-			if diff > 1 || (diff == 1 && !p.lastUsefulChunkReceived.After(existing.lastUsefulChunkReceived)) {
+			allowSteal := diff <= 1 && (diff < 1 || p.lastUsefulChunkReceived.After(existing.lastUsefulChunkReceived))
+			// For PiecePriorityNow only, also steal from a stalled or much slower holder.
+			// Use downloadRate (not DownloadRate) — we already hold the Client lock.
+			if !allowSteal && t.pieceIsNowPriority(req) {
+				cfg := t.cl.config
+				stealerRate, existingRate := p.downloadRate(), existing.downloadRate()
+				allowSteal = stealAllowedBySpeed(
+					stealerRate, existingRate,
+					existing.lastUsefulChunkReceived, time.Now(),
+					cfg.NowPriorityStealSpeedFactor, cfg.NowPriorityStealStallThreshold,
+				)
+				if allowSteal {
+					for _, f := range cfg.Callbacks.NowPriorityStealBySpeed {
+						f(NowPriorityStealEvent{
+							Torrent:      t,
+							Piece:        t.pieceIndexOfRequestIndex(req),
+							Stealer:      p,
+							Existing:     existing,
+							StealerRate:  stealerRate,
+							ExistingRate: existingRate,
+						})
+					}
+				}
+			}
+			if !allowSteal {
 				continue
 			}
 			// Don't steal a request the current holder has not had time to answer. The tests
@@ -468,3 +492,20 @@ const (
 	updateRequestsTimerDuration = 3 * time.Second
 	enableUpdateRequestsTimer   = false
 )
+
+func (t *Torrent) pieceIsNowPriority(req RequestIndex) bool {
+	return t.piece(t.pieceIndexOfRequestIndex(req)).purePriority() == PiecePriorityNow
+}
+
+// Speed-based steal for PiecePriorityNow. factor <= 1 disables the rate check;
+// stall <= 0 disables the quiet-holder check.
+func stealAllowedBySpeed(
+	stealerRate, existingRate float64,
+	existingLast, now time.Time,
+	factor float64,
+	stall time.Duration,
+) bool {
+	stalled := stall > 0 && (existingLast.IsZero() || now.Sub(existingLast) > stall)
+	fasterEnough := factor > 1 && stealerRate > 0 && stealerRate > existingRate*factor
+	return stalled || fasterEnough
+}

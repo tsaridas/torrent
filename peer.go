@@ -265,6 +265,36 @@ var (
 	maxLocalToRemoteRequests = (writeBufferHighWaterLen - writeBufferLowWaterLen - interestedMsgLen) / requestMsgLen
 )
 
+// nominalMaxRequestsForPeakRequests is the slow-start request cap. bypass is applied only for
+// fresh peers (peakRequests==0) that have a now-priority piece; bypass <= 0 disables it.
+func nominalMaxRequestsForPeakRequests(
+	peerMaxRequests, peakRequests, maxLocalToRemote, bypass maxRequests,
+	hasNowPiece bool,
+) maxRequests {
+	base := max(1, min(peerMaxRequests, peakRequests*2, maxLocalToRemote))
+	if peakRequests > 0 || !hasNowPiece || bypass <= 0 {
+		return base
+	}
+	return max(base, min(peerMaxRequests, bypass, maxLocalToRemote))
+}
+
+// hasWantedNowPriorityPiece reports whether the peer has any incomplete reader-Now piece.
+func (cn *Peer) hasWantedNowPriorityPiece() bool {
+	t := cn.t
+	if !t.haveInfo() {
+		return false
+	}
+	found := false
+	t.readerNowPieces().Iterate(func(piece pieceIndex) bool {
+		if t.pieceComplete(piece) || !cn.peerHasPiece(piece) {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
 func (cn *Peer) totalExpectingTime() (ret time.Duration) {
 	ret = cn.cumulativeExpectedToReceiveChunks
 	if !cn.lastStartedExpectingToReceiveChunks.IsZero() {
