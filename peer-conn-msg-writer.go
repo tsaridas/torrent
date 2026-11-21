@@ -72,6 +72,13 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 		if cn.closed.IsSet() {
 			return
 		}
+		// Subscribe before filling. fillWriteBuffer runs under the client lock
+		// and anything that becomes writable after it releases that lock (a
+		// peer request's data read finishing, say) Broadcasts there. Taking
+		// the signal only once the buffer is seen empty missed those, and with
+		// every other upload waiting on the alloc budget only this writer
+		// frees, nothing woke it until an unrelated event or the keepalive.
+		writeCond := cn.writeCond.Signaled()
 		cn.fillWriteBuffer()
 		keepAlive := cn.keepAlive()
 		cn.mu.Lock()
@@ -80,7 +87,6 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 			torrent.Add("written keepalives", 1)
 		}
 		if cn.writeBuffer.Len() == 0 {
-			writeCond := cn.writeCond.Signaled()
 			cn.mu.Unlock()
 			select {
 			case <-cn.closed.Done():
