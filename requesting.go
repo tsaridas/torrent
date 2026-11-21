@@ -474,6 +474,15 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			current.Requests.GetCardinality()-originalRequestCount))
 	}
 	newPeakRequests := maxRequests(current.Requests.GetCardinality() - originalRequestCount)
+	// peakRequests is the library's slow-start signal: the window is twice
+	// the requests added in the last pass. An early refill (top-up at half
+	// the window) only ever adds half a window, so without this the window
+	// could never grow past its first size -- measured on a shaped 80 ms
+	// path, refill-only fell from ~70 to ~28 MiB/s. A top-up therefore keeps
+	// the larger of the old peak and the requests now in flight.
+	if originalRequestCount > 0 && p.earlyRefillEnabled() {
+		newPeakRequests = maxInt(p.peakRequests, maxRequests(current.Requests.GetCardinality()))
+	}
 	// log.Printf(
 	// 	"requests %v->%v (peak %v->%v) reason %q (peer %v)",
 	// 	originalRequestCount, current.Requests.GetCardinality(), p.peakRequests, newPeakRequests, p.needRequestUpdate, p)

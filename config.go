@@ -268,6 +268,19 @@ type ClientConfig struct {
 	// requests at a time stays near a handful in flight however fast it is.
 	// Untested peers are unaffected; see NowPriorityRestrictedPeerRequests.
 	TorrentStreamPipeline bool
+	// EarlyRequestRefill refills a peer's request queue once its outstanding
+	// requests drop to half of its current window (nominalMaxRequests) with no
+	// cancellations pending, rather than only when the queue is empty. The
+	// window itself is unchanged; this only removes the idle round trip between
+	// a peer draining its queue and receiving the next batch.
+	EarlyRequestRefill bool
+	// BDPRequestWindow lets a proven peer's request window grow to an estimate
+	// of its bandwidth-delay product: 2 x useful delivery rate x best
+	// block-response latency, in blocks, capped by the peer's own limit,
+	// maxLocalToRemoteRequests and 256. It only ever raises the window
+	// nominalMaxRequests would otherwise pick. Independent of
+	// EarlyRequestRefill so the two can be measured separately.
+	BDPRequestWindow bool
 	// EndgamePeerBudget is retained for the Stremio app / A/B wiring
 	// (STREMIOSRV_ENDGAME_PEER_BUDGET). EndgamePiece itself does not read it:
 	// the caller's maxChunks<=0 selects whole-piece per-peer room, and
