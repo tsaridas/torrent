@@ -63,7 +63,6 @@ type (
 		updateRequestsTimer  *time.Timer
 		lastRequestUpdate    time.Time
 		peakRequests         maxRequests
-		requestBDP           requestWindowBDP
 		lastBecameInterested time.Time
 		priorInterest        time.Duration
 
@@ -439,9 +438,7 @@ func (cn *Peer) nominalMaxRequests() maxRequests {
 			n = ts
 		}
 	}
-	// The BDP window only supplements: it must not cap a connection whose
-	// slow start already found a larger useful pipeline.
-	return maxInt(n, cn.bdpRequestWindow())
+	return n
 }
 
 // torrentStreamRequests is torrent-stream's getRequestsNumber: the per-wire
@@ -765,12 +762,6 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 		return err
 	}
 	req := c.t.requestIndexFromRequest(ppReq)
-	var bdpSent time.Time
-	if c.bdpWindowEnabled() && !c.peerChoking && c.requestState.Requests.Contains(req) {
-		if state, ok := t.requestState[req]; ok && state.peer == c {
-			bdpSent = state.when
-		}
-	}
 
 	recordBlockForSmartBan := sync.OnceFunc(func() {
 		c.recordBlockForSmartBan(req, msg.Piece)
@@ -843,9 +834,6 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 		f(ReceivedUsefulDataEvent{c, msg})
 	}
 	c.lastUsefulChunkReceived = time.Now()
-	if !bdpSent.IsZero() {
-		c.requestBDP.sample(c.lastUsefulChunkReceived, c.lastUsefulChunkReceived.Sub(bdpSent), len(msg.Piece))
-	}
 
 	// Need to record that it hasn't been written yet, before we attempt to do
 	// anything with it.

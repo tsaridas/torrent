@@ -40,7 +40,7 @@ with the flags off, the bundle brought the first byte forward but made the
 | Option | Commit | What it does | App default |
 |---|---|---|---|
 | `EarlyRequestRefill` | `ababe89` | Refill a peer at half its window instead of at empty; a top-up keeps `peakRequests` | off: likely cause of the later 2 MiB mark |
-| `BDPRequestWindow` | `ababe89` | Let a proven peer's window grow to 2× its measured BDP (cap 256) | retired: no effect on any controlled path |
+| `BDPRequestWindow` | `ababe89` | Let a proven peer's window grow to 2× its measured BDP (cap 256) | removed: no effect on any controlled path |
 | `NowPriorityPreempt` | `2ab20cc` | A piece raised to Now cancels a busy peer's queued lower-priority requests (keeps ~150 ms of its rate) and queues its blocks first | off: no seek gain on real swarms |
 | `UTPDialDelay` | `adc22ad` | Hold a uTP dial behind TCP to the same address; start it once TCP fails, drop it if TCP connects; holepunch dials are never held | off with uTP (`STREMIOSRV_BT_UTP`); 500 ms when uTP is on |
 | `MSEInitialPayloadHandshake` | `adc22ad` | Send the BitTorrent handshake as the MSE initial payload: one round trip less per obfuscated connection | off pending a public-swarm A/B |

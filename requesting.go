@@ -813,3 +813,9 @@ func peerRestrictedForNowPriority(downloadRate, slowRate float64) bool {
 	}
 	return downloadRate < slowRate
 }
+
+// earlyRefillEnabled reports ClientConfig.EarlyRequestRefill for this peer's
+// client.
+func (cn *Peer) earlyRefillEnabled() bool {
+	return cn.t != nil && cn.t.cl != nil && cn.t.cl.config.EarlyRequestRefill
+}
