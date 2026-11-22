@@ -17,6 +17,7 @@ server. Status is relative to this branch.
 | 8 | `PieceHashFailures` misses failures when `storageCompletionOk` is still false | **fixed** — count when `allChunksDirty` / dirtiers |
 | 9 | `ReadableUnverifiedLen` can spin on piece-aligned v2/hybrid (`pieceEnd-pos==0`) | **fixed** — break when advance `<= 0` |
 | 10 | Cancelled shadows on silent-cancel peers permanently fill `maxShadowInFlight` | **fixed** — live+missing only; cancelled stubs expire after 30s (kept for disconnect safety, not budget) |
+| 11 | A failed DHT announce was retried at once, in a loop (~47k warnings/s on one torrent) | **fixed** (`746c4ec`) — back off 1 s doubling to 1 min, reset on success |
 
 ## Performance
 
@@ -25,9 +26,24 @@ server. Status is relative to this branch.
 | P1 | `nominalMaxRequests()` on every heap pop (walks all conns with pipeline on) | **fixed** — once per pass; unchoked count maintained on choke/unchoke/close |
 | P2 | `cancelPiecesOutsideFile` one write lock per piece (app `engine.go`) | **fixed** (app) — `CancelPieces` ranges |
 | P3 | Losing shadow copies never cancelled | **fixed** — cancel without dropping expectation until arrival/reject/expire |
-| P4 | Pipeline refill only when queue empty | open (low confidence) |
+| P4 | Pipeline refill only when queue empty | opt-in `EarlyRequestRefill` (`ababe89`); the app keeps it off, see below |
 | P5 | No per-chunk staleness gate before duplicating | open |
 | P6 | Promote/demote whole file on every stream flap | open (needs approval) |
+
+## Opt-in options for the app (2026-11-21/22)
+
+All default off. The app's decision for each (stremio-server-golang
+`docs/README.md`) comes from the real-swarm runs: against the same build
+with the flags off, the bundle brought the first byte forward but made the
+2 MiB mark later in every run.
+
+| Option | Commit | What it does | App default |
+|---|---|---|---|
+| `EarlyRequestRefill` | `ababe89` | Refill a peer at half its window instead of at empty; a top-up keeps `peakRequests` | off: likely cause of the later 2 MiB mark |
+| `BDPRequestWindow` | `ababe89` | Let a proven peer's window grow to 2× its measured BDP (cap 256) | retired: no effect on any controlled path |
+| `NowPriorityPreempt` | `2ab20cc` | A piece raised to Now cancels a busy peer's queued lower-priority requests (keeps ~150 ms of its rate) and queues its blocks first | off: no seek gain on real swarms |
+| `UTPDialDelay` | `adc22ad` | Hold a uTP dial behind TCP to the same address; start it once TCP fails, drop it if TCP connects; holepunch dials are never held | off with uTP (`STREMIOSRV_BT_UTP`); 500 ms when uTP is on |
+| `MSEInitialPayloadHandshake` | `adc22ad` | Send the BitTorrent handshake as the MSE initial payload: one round trip less per obfuscated connection | off pending a public-swarm A/B |
 
 ## Smaller
 
