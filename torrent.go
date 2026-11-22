@@ -2227,6 +2227,7 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 	cl := t.cl
 	cl.lock()
 	defer cl.unlock()
+	var retry time.Duration
 	for {
 		for {
 			if t.closed.IsSet() {
@@ -2251,11 +2252,34 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 			cl.unlock()
 			defer cl.lock()
 			err := t.timeboxedAnnounceToDht(s)
-			if err != nil {
-				t.logger.WithDefaultLevel(log.Warning).Printf("error announcing %q to DHT: %s", t, err)
+			if err == nil {
+				retry = 0
+				return
+			}
+			t.logger.WithDefaultLevel(log.Warning).Printf("error announcing %q to DHT: %s", t, err)
+			// An announce that fails at once (no starting nodes: offline, or
+			// nothing resolved for this address family) was retried at once,
+			// spinning on the client lock: ~47,000 attempts and warnings a
+			// second in a sandbox without DHT bootstrap.
+			retry = dhtAnnounceRetry(retry)
+			select {
+			case <-t.closed.Done():
+			case <-time.After(retry):
 			}
 		}()
 	}
+}
+
+// dhtAnnounceRetry is the wait after a failed DHT announce: 1s, doubling, at
+// most a minute.
+func dhtAnnounceRetry(prev time.Duration) time.Duration {
+	if prev <= 0 {
+		return time.Second
+	}
+	if next := 2 * prev; next < time.Minute {
+		return next
+	}
+	return time.Minute
 }
 
 func (t *Torrent) addPeers(peers []PeerInfo) (added int) {
