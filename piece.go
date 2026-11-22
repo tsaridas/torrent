@@ -245,6 +245,9 @@ func (p *Piece) SetPriorityNow() {
 	p.t.updatePieceRequestOrderPiece(p.index)
 	if !p.t.disableTriggers {
 		p.t.onPiecePendingTriggers(p.index, "Piece.SetPriorityNow")
+		if p.t.cl.config.NowPriorityPreempt {
+			p.t.triggerNowPreempt(p.index)
+		}
 	}
 }
 

@@ -281,6 +281,17 @@ type ClientConfig struct {
 	// nominalMaxRequests would otherwise pick. Independent of
 	// EarlyRequestRefill so the two can be measured separately.
 	BDPRequestWindow bool
+	// NowPriorityPreempt lets a PiecePriorityNow piece displace a busy peer's
+	// own queued lower-priority requests. Without it, a piece that becomes Now
+	// (a reader blocked on it, as after a seek) is requested from a peer whose
+	// queue is full only once that queue has drained -- up to
+	// maxLocalToRemoteRequests blocks -- because a full queue takes no new
+	// requests and SetPriorityNow re-evaluates only peers that are low on
+	// requests. With it, SetPriorityNow also re-evaluates the busy peers that
+	// have the piece, and each cancels its lowest-priority, most recently
+	// queued requests to make room for the Now blocks. The window itself is
+	// unchanged.
+	NowPriorityPreempt bool
 	// EndgamePeerBudget is retained for the Stremio app / A/B wiring
 	// (STREMIOSRV_ENDGAME_PEER_BUDGET). EndgamePiece itself does not read it:
 	// the caller's maxChunks<=0 selects whole-piece per-peer room, and
