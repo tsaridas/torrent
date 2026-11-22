@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -783,7 +784,17 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
+		// uTP waits for TCP unless this dial answers a holepunch connect, which only works if it
+		// starts together with the remote's.
+		holdUtp := cl.config.UTPDialDelay > 0 && !opts.receivedHolepunchConnect &&
+			slices.ContainsFunc(cl.dialers, func(d Dialer) bool {
+				return !parseNetworkString(d.DialerNetwork()).Udp
+			})
 		for _, d := range cl.dialers {
+			if holdUtp && parseNetworkString(d.DialerNetwork()).Udp {
+				dialPool.holdBack(ctx, d, cl.config.UTPDialDelay)
+				continue
+			}
 			dialPool.add(ctx, d)
 		}
 	}
@@ -913,7 +924,18 @@ func (cl *Client) incomingPeerPort() int {
 }
 
 func (cl *Client) initiateHandshakes(ctx context.Context, c *PeerConn, t *Torrent) (err error) {
+	localReservedBits := cl.config.Extensions
+	handshakeIh := *t.canonicalShortInfohash()
+	// If we're sending the v1 infohash, and we know the v2 infohash, set the v2 upgrade bit. This
+	// means the peer can send the v2 infohash in the handshake to upgrade the connection.
+	localReservedBits.SetBit(pp.ExtensionBitV2Upgrade, g.Some(handshakeIh) == t.infoHash && t.infoHashV2.Ok)
+	// Whether the BitTorrent handshake already went out as the MSE initial payload.
+	var btSent bool
 	if c.headerEncrypted {
+		var ia []byte
+		if cl.config.MSEInitialPayloadHandshake {
+			ia = pp.HandshakeBytes(handshakeIh, cl.peerID, localReservedBits)
+		}
 		var rw io.ReadWriter
 		rw, c.cryptoMethod, err = mse.InitiateHandshakeContext(
 			ctx,
@@ -922,20 +944,19 @@ func (cl *Client) initiateHandshakes(ctx context.Context, c *PeerConn, t *Torren
 				io.Writer
 			}{c.r, c.w},
 			t.canonicalShortInfohash().Bytes(),
-			nil,
+			ia,
 			cl.config.CryptoProvides,
 		)
 		c.setRW(rw)
 		if err != nil {
 			return fmt.Errorf("header obfuscation handshake: %w", err)
 		}
+		if ia != nil {
+			btSent = true
+			torrent.Add("initiated handshakes with bittorrent handshake in mse initial payload", 1)
+		}
 	}
-	localReservedBits := cl.config.Extensions
-	handshakeIh := *t.canonicalShortInfohash()
-	// If we're sending the v1 infohash, and we know the v2 infohash, set the v2 upgrade bit. This
-	// means the peer can send the v2 infohash in the handshake to upgrade the connection.
-	localReservedBits.SetBit(pp.ExtensionBitV2Upgrade, g.Some(handshakeIh) == t.infoHash && t.infoHashV2.Ok)
-	ih, err := cl.connBtHandshake(context.TODO(), c, &handshakeIh, localReservedBits)
+	ih, err := cl.connBtHandshake(context.TODO(), c, &handshakeIh, localReservedBits, btSent)
 	if err != nil {
 		return fmt.Errorf("bittorrent protocol handshake: %w", err)
 	}
@@ -1012,7 +1033,7 @@ func (cl *Client) receiveHandshakes(c *PeerConn) (t *Torrent, err error) {
 		err = errors.New("connection does not have required header obfuscation")
 		return
 	}
-	ih, err := cl.connBtHandshake(context.TODO(), c, nil, cl.config.Extensions)
+	ih, err := cl.connBtHandshake(context.TODO(), c, nil, cl.config.Extensions, false)
 	if err != nil {
 		return nil, fmt.Errorf("during bt handshake: %w", err)
 	}
@@ -1036,8 +1057,15 @@ func init() {
 		&successfulPeerWireProtocolHandshakePeerReservedBytes)
 }
 
-func (cl *Client) connBtHandshake(ctx context.Context, c *PeerConn, ih *metainfo.Hash, reservedBits PeerExtensionBits) (ret metainfo.Hash, err error) {
-	res, err := pp.Handshake(ctx, c.rw(), ih, cl.peerID, reservedBits)
+// sent is true when the local half of the handshake already went out (as an MSE initial payload),
+// so only the peer's half is read. It requires ih.
+func (cl *Client) connBtHandshake(ctx context.Context, c *PeerConn, ih *metainfo.Hash, reservedBits PeerExtensionBits, sent bool) (ret metainfo.Hash, err error) {
+	var res pp.HandshakeResult
+	if sent {
+		res, err = pp.HandshakeAfterSent(ctx, c.rw(), *ih)
+	} else {
+		res, err = pp.Handshake(ctx, c.rw(), ih, cl.peerID, reservedBits)
+	}
 	if err != nil {
 		return
 	}

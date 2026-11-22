@@ -109,12 +109,24 @@ type ClientConfig struct {
 	DisableUTP bool
 	// For the bittorrent protocol.
 	DisableTCP bool `long:"disable-tcp"`
+	// UTPDialDelay holds an outgoing uTP dial back until the TCP dials to the same address have
+	// had this long, or have all failed, and drops it if one of them connects. Without it a client
+	// with both transports dials each peer over both at once and keeps whichever connects first,
+	// so a peer that takes TCP can land on uTP by chance. Dials answering a holepunch connect
+	// message are never held back: they must start together with the remote's. 0 dials both at
+	// once.
+	UTPDialDelay time.Duration
 	// Called to instantiate storage for each added torrent. Builtin backends
 	// are in the storage package. If not set, the "file" implementation is
 	// used (and Closed when the Client is Closed).
 	DefaultStorage storage.ClientImpl
 
 	HeaderObfuscationPolicy HeaderObfuscationPolicy
+	// MSEInitialPayloadHandshake sends the BitTorrent handshake of an outgoing obfuscated
+	// connection as the MSE initial payload (IA) instead of after the MSE exchange. The receiver
+	// can answer it right behind its own MSE reply, which saves one round trip per obfuscated
+	// outgoing connection. IA is part of the MSE spec and this library's receiver handles it.
+	MSEInitialPayloadHandshake bool
 	// The crypto methods to offer when initiating connections with header obfuscation.
 	CryptoProvides mse.CryptoMethod
 	// Chooses the crypto method to use when receiving connections with header obfuscation.
