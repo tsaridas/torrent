@@ -347,133 +347,17 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 	// pipeline) on every heap pop was milliseconds under the write lock with
 	// hundreds of peers. The budget does not change within this loop.
 	maxReq := p.nominalMaxRequests()
-	// Now-priority preemption (ClientConfig.NowPriorityPreempt): once the
-	// window is full, an unrequested Now block may replace this peer's
-	// lowest-priority queued request. Not on a reject: those passes add
-	// nothing, see below. written counts the requests and cancels this pass
-	// puts in the write buffer, which maxLocalToRemoteRequests sizes for one
-	// message per request; each replacement costs two.
-	preempt := p.nowPreemptEnabled() && p.needRequestUpdate != peerUpdateRequestsRemoteRejectReason
-	if preempt {
-		p.nowPreemptStarved = false
-	}
-	preempted, written := 0, 0
-	var victims []RequestIndex
-	victimsListed := false
-	// Preempt only for a Now piece this peer is not already working on: after
-	// a seek the landing piece has no request here, while in sequential
-	// reading the next piece normally has some in flight. Swapping requests
-	// there only cancels readahead the reader is about to need.
-	// trimForNow runs once per pass, just before the first Now block that
-	// preempts is requested. A peer serves its queue roughly in order, so a
-	// swap alone leaves the Now blocks behind everything still queued; this
-	// also withdraws the queued lower-priority requests beyond
-	// nowPreemptKeep, newest first, to be requested again behind them. It
-	// leaves write-buffer room for at least as many requests as it cancels.
-	trimmed := false
-	trimForNow := func() {
-		trimmed = true
-		victims = p.nowPreemptVictims()
-		victimsListed = true
-		n := minInt(len(victims)-p.nowPreemptKeep(), (maxLocalToRemoteRequests-written)/2)
-		if n <= 0 {
-			return
-		}
-		for _, v := range victims[:n] {
-			p.preemptRequest(v)
-		}
-		victims = victims[n:]
-		preempted += n
-		written += n
-	}
-	working := map[pieceIndex]bool{}
-	workingOn := func(piece pieceIndex) bool {
-		w, ok := working[piece]
-		if !ok {
-			w = p.holdsRequestInPiece(piece)
-			working[piece] = w
-		}
-		return w
-	}
 	for {
 		if requestHeap.Len() == 0 {
 			break
 		}
 		numPending := maxRequests(current.Requests.GetCardinality() + current.Cancelled.GetCardinality())
 		if numPending >= maxReq {
-			if !preempt {
-				break
-			}
-			top := next.Requests.requestIndexes[0] // the heap's best request
-			if !t.pieceIsNowPriority(top) {
-				break
-			}
-			if t.requestingPeer(top) != nil {
-				// Already in flight, here or with another peer: look further.
-				heap.Pop(requestHeap)
-				continue
-			}
-			countsTowardNow := false
-			if restricted {
-				if c := nowCapFor(t.pieceIndexOfRequestIndex(top)); c >= 0 {
-					if nowHeld >= c {
-						torrent.Add(nowPriorityRestrictedSkipsVar, 1)
-						heap.Pop(requestHeap)
-						continue
-					}
-					countsTowardNow = true
-				}
-			}
-			if workingOn(t.pieceIndexOfRequestIndex(top)) {
-				break
-			}
-			if !trimmed {
-				trimForNow()
-			}
-			// Cancels needed to get under the window before this request. The
-			// queue can hold more than the window: a cancel or reject after it
-			// filled lowers peakRequests, and with it nominalMaxRequests.
-			need := maxRequests(current.Requests.GetCardinality()) - maxReq + 1
-			if need < 0 {
-				need = 0
-			}
-			if written+need+1 > maxLocalToRemoteRequests {
-				p.nowPreemptStarved = true
-				break
-			}
-			if need > 0 {
-				if !victimsListed {
-					victims = p.nowPreemptVictims()
-					victimsListed = true
-				}
-				if len(victims) < need {
-					break
-				}
-				for _, v := range victims[:need] {
-					p.preemptRequest(v)
-				}
-				victims = victims[need:]
-				preempted += need
-			}
-			heap.Pop(requestHeap)
-			more = p.mustRequest(top)
-			written += need + 1
-			if countsTowardNow {
-				nowHeld++
-			}
-			if !more {
-				break
-			}
-			continue
+			break
 		}
 		req := heap.Pop(requestHeap)
 		if cap(next.Requests.requestIndexes) != cap(orig) {
 			panic("changed")
-		}
-		if !current.Cancelled.IsEmpty() && current.Cancelled.Contains(req) {
-			// Withdrawn earlier in this pass (preemption) and awaiting the
-			// peer's reject. The heap was built before, so it still lists it.
-			continue
 		}
 
 		// don't add requests on reciept of a reject - because this causes request back
@@ -573,13 +457,6 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			}
 			t.cancelRequest(req)
 		}
-		if !current.Requests.Contains(req) {
-			if preempt && !trimmed && existing == nil && t.pieceIsNowPriority(req) &&
-				!workingOn(t.pieceIndexOfRequestIndex(req)) {
-				trimForNow()
-			}
-			written++
-		}
 		more = p.mustRequest(req)
 		if countsTowardNow {
 			nowHeld++
@@ -596,27 +473,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			"couldn't fill apply entire request state [newRequests=%v]",
 			current.Requests.GetCardinality()-originalRequestCount))
 	}
-	// Requests added this pass: preempted ones left originalRequestCount and
-	// their replacements were added back.
-	newPeakRequests := maxRequests(current.Requests.GetCardinality()) - maxRequests(originalRequestCount) + preempted
-	// peakRequests is the library's slow-start signal: the window is twice
-	// the requests added in the last pass. An early refill (top-up at half
-	// the window) only ever adds half a window, so without this the window
-	// could never grow past its first size -- measured on a shaped 80 ms
-	// path, refill-only fell from ~70 to ~28 MiB/s. A top-up therefore keeps
-	// the larger of the old peak and the requests now in flight.
-	if originalRequestCount > 0 && p.earlyRefillEnabled() {
-		newPeakRequests = maxInt(p.peakRequests, maxRequests(current.Requests.GetCardinality()))
-	}
-	// The window is twice the requests the last pass added, which assumes a
-	// pass starts from an empty queue. With preemption, SetPriorityNow also
-	// runs passes on busy peers, and those add little or nothing: keep the
-	// window where it was rather than collapse it (measured: -5% throughput at
-	// 200 Mbit before this, from those passes alone). A replacement is not new
-	// demand either.
-	if preempted > 0 || (preempt && originalRequestCount > 0) {
-		newPeakRequests = maxInt(p.peakRequests, newPeakRequests)
-	}
+	newPeakRequests := maxRequests(current.Requests.GetCardinality() - originalRequestCount)
 	// log.Printf(
 	// 	"requests %v->%v (peak %v->%v) reason %q (peer %v)",
 	// 	originalRequestCount, current.Requests.GetCardinality(), p.peakRequests, newPeakRequests, p.needRequestUpdate, p)
@@ -812,10 +669,4 @@ func peerRestrictedForNowPriority(downloadRate, slowRate float64) bool {
 		return true
 	}
 	return downloadRate < slowRate
-}
-
-// earlyRefillEnabled reports ClientConfig.EarlyRequestRefill for this peer's
-// client.
-func (cn *Peer) earlyRefillEnabled() bool {
-	return cn.t != nil && cn.t.cl != nil && cn.t.cl.config.EarlyRequestRefill
 }

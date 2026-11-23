@@ -66,11 +66,6 @@ type (
 		lastBecameInterested time.Time
 		priorInterest        time.Duration
 
-		// nowPreemptStarved: the last update pass ran out of write-buffer
-		// budget with unrequested Now blocks still waiting, so the next
-		// received chunk should run another. See ClientConfig.NowPriorityPreempt.
-		nowPreemptStarved bool
-
 		lastStartedExpectingToReceiveChunks time.Time
 		cumulativeExpectedToReceiveChunks   time.Duration
 		_chunksReceivedWhileExpecting       int64
@@ -1049,18 +1044,7 @@ func (p *Peer) uncancelledRequests() uint64 {
 type peerLocalPublicAddr = IpPort
 
 func (p *Peer) isLowOnRequests() bool {
-	if p.nowPreemptStarved {
-		return true
-	}
-	if !p.requestState.Cancelled.IsEmpty() {
-		return false
-	}
-	if p.earlyRefillEnabled() {
-		// Refill at half the current window instead of at empty. A window of
-		// 1 still refills only when empty.
-		return p.requestState.Requests.GetCardinality() <= uint64(p.nominalMaxRequests())/2
-	}
-	return p.requestState.Requests.IsEmpty()
+	return p.requestState.Requests.IsEmpty() && p.requestState.Cancelled.IsEmpty()
 }
 
 func (p *Peer) decPeakRequests() {

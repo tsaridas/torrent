@@ -132,37 +132,6 @@ func Handshake(
 ) (
 	res HandshakeResult, err error,
 ) {
-	return handshake(ctx, sock, ih, peerID, extensions, false)
-}
-
-// HandshakeBytes is the opening an initiator's Handshake writes: protocol string, extension bits,
-// infohash and peer ID, 68 bytes. An MSE initiator can deliver it as the initial payload (IA) and
-// then finish with HandshakeAfterSent.
-func HandshakeBytes(ih metainfo.Hash, peerID [20]byte, extensions PeerExtensionBits) []byte {
-	b := make([]byte, 0, 68)
-	b = append(b, protocolBytes()...)
-	b = append(b, extensions[:]...)
-	b = append(b, ih[:]...)
-	return append(b, peerID[:]...)
-}
-
-// HandshakeAfterSent completes an initiator's handshake whose HandshakeBytes the caller already
-// delivered, for example as an MSE initial payload: it only reads the peer's half.
-func HandshakeAfterSent(ctx context.Context, sock io.ReadWriter, ih metainfo.Hash) (HandshakeResult, error) {
-	return handshake(ctx, sock, &ih, [20]byte{}, PeerExtensionBits{}, true)
-}
-
-func handshake(
-	ctx context.Context,
-	sock io.ReadWriter,
-	ih *metainfo.Hash,
-	peerID [20]byte,
-	extensions PeerExtensionBits,
-	sent bool,
-) (
-	res HandshakeResult, err error,
-) {
-	panicif.True(sent && ih == nil)
 	sock = ctxrw.WrapReadWriter(ctx, sock)
 	// Bytes to be sent to the peer. Should never block the sender.
 	postCh := make(chan []byte, 4)
@@ -187,13 +156,11 @@ func handshake(
 		panicif.SendBlocks(postCh, bb)
 	}
 
-	if !sent {
-		post(protocolBytes())
-		post(extensions[:])
-		if ih != nil { // We already know what we want.
-			post(ih[:])
-			post(peerID[:])
-		}
+	post(protocolBytes())
+	post(extensions[:])
+	if ih != nil { // We already know what we want.
+		post(ih[:])
+		post(peerID[:])
 	}
 
 	// Putting an array on the heap still escapes.

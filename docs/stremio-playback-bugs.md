@@ -26,24 +26,24 @@ server. Status is relative to this branch.
 | P1 | `nominalMaxRequests()` on every heap pop (walks all conns with pipeline on) | **fixed** — once per pass; unchoked count maintained on choke/unchoke/close |
 | P2 | `cancelPiecesOutsideFile` one write lock per piece (app `engine.go`) | **fixed** (app) — `CancelPieces` ranges |
 | P3 | Losing shadow copies never cancelled | **fixed** — cancel without dropping expectation until arrival/reject/expire |
-| P4 | Pipeline refill only when queue empty | opt-in `EarlyRequestRefill` (`ababe89`); the app keeps it off, see below |
+| P4 | Pipeline refill only when queue empty | won't fix: `EarlyRequestRefill` (`ababe89`) was tried and removed, see below |
 | P5 | No per-chunk staleness gate before duplicating | open |
 | P6 | Promote/demote whole file on every stream flap | open (needs approval) |
 
-## Opt-in options for the app (2026-11-21/22)
+## Options tried for the app (2026-11-21/23)
 
-All default off. The app's decision for each (stremio-server-golang
-`docs/README.md`) comes from the real-swarm runs: against the same build
-with the flags off, the bundle brought the first byte forward but made the
-2 MiB mark later in every run.
+Each was added off by default and A/B tested on real swarms, by time to
+the first decoded frame against the same build with it off
+(stremio-server-golang `docs/2026-11-21-mac-ab-native-player-benchmark.md`,
+runs 7–9). Only `UTPDialDelay` is left.
 
-| Option | Commit | What it does | App default |
+| Option | Commit | What it does | Outcome |
 |---|---|---|---|
-| `EarlyRequestRefill` | `ababe89` | Refill a peer at half its window instead of at empty; a top-up keeps `peakRequests` | off: likely cause of the later 2 MiB mark |
+| `EarlyRequestRefill` | `ababe89` | Refill a peer at half its window instead of at empty; a top-up keeps `peakRequests` | removed: first frame after a seek 64% later (paired) |
 | `BDPRequestWindow` | `ababe89` | Let a proven peer's window grow to 2× its measured BDP (cap 256) | removed: no effect on any controlled path |
-| `NowPriorityPreempt` | `2ab20cc` | A piece raised to Now cancels a busy peer's queued lower-priority requests (keeps ~150 ms of its rate) and queues its blocks first | off: no seek gain on real swarms |
+| `NowPriorityPreempt` | `2ab20cc` | A piece raised to Now cancels a busy peer's queued lower-priority requests (keeps ~150 ms of its rate) and queues its blocks first | removed: no stable first-frame effect, 12% less throughput |
 | `UTPDialDelay` | `adc22ad` | Hold a uTP dial behind TCP to the same address; start it once TCP fails, drop it if TCP connects; holepunch dials are never held | off with uTP (`STREMIOSRV_BT_UTP`); 500 ms when uTP is on |
-| `MSEInitialPayloadHandshake` | `adc22ad` | Send the BitTorrent handshake as the MSE initial payload: one round trip less per obfuscated connection | off pending a public-swarm A/B |
+| `MSEInitialPayloadHandshake` | `adc22ad` | Send the BitTorrent handshake as the MSE initial payload: one round trip less per obfuscated connection | removed: fewer completed handshakes, no first-frame gain |
 
 ## Smaller
 

@@ -1,7 +1,6 @@
 package torrent
 
 import (
-	"expvar"
 	"net"
 	"os"
 	"testing"
@@ -10,7 +9,6 @@ import (
 	qt "github.com/go-quicktest/qt"
 
 	"github.com/anacrolix/torrent/internal/testutil"
-	"github.com/anacrolix/torrent/mse"
 )
 
 // Starts a seeder of the greeting torrent and returns it with its data dir removed on cleanup.
@@ -75,60 +73,4 @@ func TestUTPDialDelayFallsBackToUTPOnceTCPFails(t *testing.T) {
 	network := utpDialDelayConnect(t, seeder, time.Hour)
 	qt.Check(t, qt.IsTrue(parseNetworkString(network).Udp))
 	qt.Check(t, qt.IsTrue(time.Since(start) < 5*time.Second))
-}
-
-func expvarTorrentInt(key string) int64 {
-	if v, ok := torrent.Get(key).(*expvar.Int); ok {
-		return v.Value()
-	}
-	return 0
-}
-
-const iaHandshakesKey = "initiated handshakes with bittorrent handshake in mse initial payload"
-
-func TestMSEInitialPayloadHandshakeSeederRequiresObfuscation(t *testing.T) {
-	before := expvarTorrentInt(iaHandshakesKey)
-	testSeederLeecherPair(
-		t,
-		func(cfg *ClientConfig) {
-			cfg.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: true, RequirePreferred: true}
-		},
-		func(cfg *ClientConfig) {
-			cfg.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: true, RequirePreferred: true}
-			cfg.MSEInitialPayloadHandshake = true
-		},
-	)
-	qt.Check(t, qt.IsTrue(expvarTorrentInt(iaHandshakesKey) > before))
-}
-
-func TestMSEInitialPayloadHandshakeFallsBackToPlaintext(t *testing.T) {
-	// The seeder refuses obfuscation, so the leecher's MSE attempt with the handshake in its
-	// initial payload fails and the plaintext retry has to send the handshake normally.
-	testSeederLeecherPair(
-		t,
-		func(cfg *ClientConfig) {
-			cfg.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: false, RequirePreferred: true}
-		},
-		func(cfg *ClientConfig) {
-			cfg.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: true, RequirePreferred: false}
-			cfg.MSEInitialPayloadHandshake = true
-		},
-	)
-}
-
-func TestMSEInitialPayloadHandshakeRC4(t *testing.T) {
-	// The seeder only accepts RC4, so the stream after the initial payload stays encrypted.
-	before := expvarTorrentInt(iaHandshakesKey)
-	defer func() { qt.Check(t, qt.IsTrue(expvarTorrentInt(iaHandshakesKey) > before)) }()
-	testSeederLeecherPair(
-		t,
-		func(cfg *ClientConfig) {
-			cfg.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: true, RequirePreferred: true}
-			cfg.CryptoSelector = func(provided mse.CryptoMethod) mse.CryptoMethod { return mse.CryptoMethodRC4 }
-		},
-		func(cfg *ClientConfig) {
-			cfg.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: true, RequirePreferred: true}
-			cfg.MSEInitialPayloadHandshake = true
-		},
-	)
 }

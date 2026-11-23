@@ -122,11 +122,6 @@ type ClientConfig struct {
 	DefaultStorage storage.ClientImpl
 
 	HeaderObfuscationPolicy HeaderObfuscationPolicy
-	// MSEInitialPayloadHandshake sends the BitTorrent handshake of an outgoing obfuscated
-	// connection as the MSE initial payload (IA) instead of after the MSE exchange. The receiver
-	// can answer it right behind its own MSE reply, which saves one round trip per obfuscated
-	// outgoing connection. IA is part of the MSE spec and this library's receiver handles it.
-	MSEInitialPayloadHandshake bool
 	// The crypto methods to offer when initiating connections with header obfuscation.
 	CryptoProvides mse.CryptoMethod
 	// Chooses the crypto method to use when receiving connections with header obfuscation.
@@ -280,23 +275,6 @@ type ClientConfig struct {
 	// requests at a time stays near a handful in flight however fast it is.
 	// Untested peers are unaffected; see NowPriorityRestrictedPeerRequests.
 	TorrentStreamPipeline bool
-	// EarlyRequestRefill refills a peer's request queue once its outstanding
-	// requests drop to half of its current window (nominalMaxRequests) with no
-	// cancellations pending, rather than only when the queue is empty. The
-	// window itself is unchanged; this only removes the idle round trip between
-	// a peer draining its queue and receiving the next batch.
-	EarlyRequestRefill bool
-	// NowPriorityPreempt lets a PiecePriorityNow piece displace a busy peer's
-	// own queued lower-priority requests. Without it, a piece that becomes Now
-	// (a reader blocked on it, as after a seek) is requested from a peer whose
-	// queue is full only once that queue has drained -- up to
-	// maxLocalToRemoteRequests blocks -- because a full queue takes no new
-	// requests and SetPriorityNow re-evaluates only peers that are low on
-	// requests. With it, SetPriorityNow also re-evaluates the busy peers that
-	// have the piece, and each cancels its lowest-priority, most recently
-	// queued requests to make room for the Now blocks. The window itself is
-	// unchanged.
-	NowPriorityPreempt bool
 	// EndgamePeerBudget is retained for the Stremio app / A/B wiring
 	// (STREMIOSRV_ENDGAME_PEER_BUDGET). EndgamePiece itself does not read it:
 	// the caller's maxChunks<=0 selects whole-piece per-peer room, and
