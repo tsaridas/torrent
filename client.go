@@ -65,13 +65,14 @@ type Client struct {
 	config *ClientConfig
 	logger log.Logger
 
-	peerID         PeerID
-	defaultStorage *storage.Client
-	onClose        []func()
-	dialers        []Dialer
-	listeners      []Listener
-	dhtServers     []DhtServer
-	ipBlockList    iplist.Ranger
+	peerID          PeerID
+	defaultStorage  *storage.Client
+	onClose         []func()
+	dialers         []Dialer
+	fallbackDialers []Dialer
+	listeners       []Listener
+	dhtServers      []DhtServer
+	ipBlockList     iplist.Ranger
 
 	// Set of addresses that have our client ID. This intentionally will
 	// include ourselves if we end up trying to connect to our own address
@@ -290,12 +291,18 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 	for _, _s := range sockets {
 		s := _s // Go is fucking retarded.
 		cl.onClose = append(cl.onClose, func() { go s.Close() })
-		if peerNetworkEnabled(parseNetworkString(s.Addr().Network()), cl.config) {
+		netw := parseNetworkString(s.Addr().Network())
+		if peerNetworkEnabled(netw, cl.config) {
 			cl.dialers = append(cl.dialers, s)
 			cl.listeners = append(cl.listeners, s)
 			if cl.config.AcceptPeerConnections {
 				go cl.acceptConnections(s)
 			}
+		} else if cl.config.DisableUTP && cl.config.UTPFallback && netw.Udp {
+			// Inbound uTP stays off: accepting inbound uTP for torrents with fallback on
+			// would require an accept loop plus an infohash check after handshake that
+			// we don't need for the thin swarm. We only use this socket for outgoing fallback dials.
+			cl.fallbackDialers = append(cl.fallbackDialers, s)
 		}
 	}
 
@@ -402,7 +409,7 @@ func (cl *Client) listenOnNetwork(n network) bool {
 	if n.Tcp && cl.config.DisableTCP {
 		return false
 	}
-	if n.Udp && cl.config.DisableUTP && cl.config.NoDHT {
+	if n.Udp && cl.config.DisableUTP && !cl.config.UTPFallback && cl.config.NoDHT {
 		return false
 	}
 	return true
@@ -784,13 +791,17 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
+		dialers := cl.dialers
+		if opts.t != nil && opts.t.UTPFallback() && len(cl.fallbackDialers) > 0 {
+			dialers = append(slices.Clone(cl.dialers), cl.fallbackDialers...)
+		}
 		// uTP waits for TCP unless this dial answers a holepunch connect, which only works if it
 		// starts together with the remote's.
 		holdUtp := cl.config.UTPDialDelay > 0 && !opts.receivedHolepunchConnect &&
-			slices.ContainsFunc(cl.dialers, func(d Dialer) bool {
+			slices.ContainsFunc(dialers, func(d Dialer) bool {
 				return !parseNetworkString(d.DialerNetwork()).Udp
 			})
-		for _, d := range cl.dialers {
+		for _, d := range dialers {
 			if holdUtp && parseNetworkString(d.DialerNetwork()).Udp {
 				dialPool.holdBack(ctx, d, cl.config.UTPDialDelay)
 				continue
@@ -804,6 +815,11 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 	firstDialResult := dialPool.getFirst()
 	if firstDialResult.Conn == nil {
 		// No dialers worked. Try to initiate a holepunching rendezvous.
+		// Note: Holepunching (BEP 55 ut_holepunch) only works over uTP because UDP hole-punching
+		// traverses NATs by sending UDP packets simultaneously from both endpoints.
+		// With DisableUTP=true and no uTP fallback, holepunching was silently dead because no UDP
+		// dialer was available to connect. With UTPFallback enabled, fallbackDialers provides the UDP
+		// socket so that uTP holepunch connects can dial out and succeed.
 		if holepunchAddrErr == nil {
 			cl.lock()
 			if !opts.receivedHolepunchConnect {
@@ -909,6 +925,9 @@ func (cl *Client) outgoingConnection(
 				opts.peerInfo.Addr,
 				err,
 			)
+		}
+		if opts.t != nil {
+			opts.t.recordFailedDialLocked(opts.peerInfo)
 		}
 		return
 	}

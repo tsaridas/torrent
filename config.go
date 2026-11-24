@@ -107,6 +107,12 @@ type ClientConfig struct {
 	PeerID string
 	// For the bittorrent protocol.
 	DisableUTP bool
+	// UTPFallback enables uTP as a fallback dialer on torrents that explicitly opt in via
+	// (t *Torrent).SetUTPFallback(true). When DisableUTP is true and UTPFallback is true,
+	// the uTP socket is kept in fallbackDialers rather than dialers/listeners. Outgoing dials
+	// for an opted-in torrent attempt uTP (with UTPDialDelay hold-back when TCP dialers exist),
+	// and holepunching is enabled for that torrent. Inbound uTP connections remain disabled.
+	UTPFallback bool
 	// For the bittorrent protocol.
 	DisableTCP bool `long:"disable-tcp"`
 	// UTPDialDelay holds an outgoing uTP dial back until the TCP dials to the same address have

@@ -16,8 +16,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"text/tabwriter"
 	"sync/atomic"
+	"text/tabwriter"
 	"time"
 	"unsafe"
 
@@ -147,6 +147,10 @@ type Torrent struct {
 	// them. That encourages us to reconnect to peers that are well known in
 	// the swarm.
 	peers prioritizedPeers
+	// Whether uTP fallback is enabled for this torrent.
+	utpFallback bool
+	// Failed dials recorded on this torrent, to allow re-queuing when uTP fallback is enabled.
+	failedDials map[string]failedDialCandidate
 	// Whether we want to know more peers.
 	wantPeersEvent missinggo.Event
 	// An announcer for each tracker URL.
@@ -1653,7 +1657,7 @@ func (t *Torrent) openNewConns() (initiated int) {
 		if len(t.halfOpen) >= t.maxHalfOpen() {
 			return
 		}
-		if len(t.cl.dialers) == 0 {
+		if len(t.cl.dialers) == 0 && (!t.utpFallback || len(t.cl.fallbackDialers) == 0) {
 			return
 		}
 		if t.cl.numHalfOpen >= t.cl.config.TotalHalfOpenConns {
@@ -2106,7 +2110,7 @@ func (t *Torrent) announceRequest(
 	return tracker.AnnounceRequest{
 		Event: event,
 		NumWant: func() int32 {
-			if t.wantPeers() && len(t.cl.dialers) > 0 {
+			if t.wantPeers() && (len(t.cl.dialers) > 0 || (t.utpFallback && len(t.cl.fallbackDialers) > 0)) {
 				// Windozer has UDP packet limit. See:
 				// https://github.com/anacrolix/torrent/issues/764
 				return 200
@@ -2240,7 +2244,7 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 				goto wait
 			}
 			// TODO: Determine if there's a listener on the port we're announcing.
-			if len(cl.dialers) == 0 && len(cl.listeners) == 0 {
+			if len(cl.dialers) == 0 && len(cl.listeners) == 0 && (!cl.config.UTPFallback || len(cl.fallbackDialers) == 0) {
 				goto wait
 			}
 			break
@@ -2941,6 +2945,82 @@ func (t *Torrent) SetOnWriteChunkError(f func(error)) {
 	t.cl.lock()
 	defer t.cl.unlock()
 	t.userOnWriteChunkErr = f
+}
+
+type failedDialCandidate struct {
+	peer     PeerInfo
+	failedAt time.Time
+}
+
+func (t *Torrent) recordFailedDialLocked(p PeerInfo) {
+	if t.failedDials == nil {
+		t.failedDials = make(map[string]failedDialCandidate)
+	}
+	now := time.Now()
+	t.failedDials[p.Addr.String()] = failedDialCandidate{
+		peer:     p,
+		failedAt: now,
+	}
+	if len(t.failedDials) > 500 {
+		cutoff := now.Add(-15 * time.Minute)
+		for k, v := range t.failedDials {
+			if v.failedAt.Before(cutoff) {
+				delete(t.failedDials, k)
+			}
+		}
+	}
+}
+
+func (t *Torrent) redialFailedCandidatesLocked() {
+	if len(t.failedDials) == 0 {
+		return
+	}
+	cutoff := time.Now().Add(-10 * time.Minute)
+	var toRequeue []PeerInfo
+	for _, fd := range t.failedDials {
+		requeue := false
+		if !fd.failedAt.Before(cutoff) {
+			requeue = true
+		} else if holepunchAddr, err := addrPortFromPeerRemoteAddr(fd.peer.Addr); err == nil {
+			if g.MapContains(t.cl.undialableWithoutHolepunch, holepunchAddr) {
+				requeue = true
+			}
+		}
+		if requeue {
+			toRequeue = append(toRequeue, fd.peer)
+		}
+	}
+	for _, p := range toRequeue {
+		t.peers.Add(p)
+	}
+}
+
+// SetUTPFallback enables or disables uTP fallback for this torrent.
+// When enabled on a client with DisableUTP and UTPFallback set, outgoing dials
+// for this torrent will also attempt uTP (with UTPDialDelay hold-back when TCP
+// dialers exist). Candidate peers that failed in the last ~10 min or were marked
+// undialable are re-queued to be retried over uTP.
+func (t *Torrent) SetUTPFallback(on bool) {
+	t.cl.lock()
+	defer t.cl.unlock()
+	if t.utpFallback == on {
+		return
+	}
+	t.utpFallback = on
+	if on {
+		// Inbound uTP stays off: accepting inbound uTP for torrents with fallback on
+		// would require an accept loop plus an infohash check after handshake that
+		// we don't need for the thin swarm.
+		t.redialFailedCandidatesLocked()
+		t.openNewConns()
+	}
+}
+
+// UTPFallback reports whether uTP fallback is enabled for this torrent.
+func (t *Torrent) UTPFallback() bool {
+	t.cl.lock()
+	defer t.cl.unlock()
+	return t.utpFallback
 }
 
 func (t *Torrent) iterPeersWhile(f func(p *Peer) bool) {
