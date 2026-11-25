@@ -2244,7 +2244,7 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 				goto wait
 			}
 			// TODO: Determine if there's a listener on the port we're announcing.
-			if len(cl.dialers) == 0 && len(cl.listeners) == 0 && (!cl.config.UTPFallback || len(cl.fallbackDialers) == 0) {
+			if len(cl.dialers) == 0 && len(cl.listeners) == 0 && (!t.utpFallback || len(cl.fallbackDialers) == 0) {
 				goto wait
 			}
 			break
@@ -3040,6 +3040,7 @@ func (t *Torrent) SetUTPFallback(on bool) {
 		// we don't need for the thin swarm.
 		t.redialFailedCandidatesLocked()
 		t.openNewConns()
+		t.cl.event.Broadcast()
 	}
 }
 
