@@ -2952,7 +2952,21 @@ type failedDialCandidate struct {
 	failedAt time.Time
 }
 
+// maxFailedDials bounds failedDials per torrent.
+const maxFailedDials = 1000
+
+// failedDialRequeueWindow is how far back redialFailedCandidatesLocked looks.
+const failedDialRequeueWindow = 10 * time.Minute
+
+// recordFailedDialLocked remembers a peer whose dial failed so a later
+// SetUTPFallback(true) can retry it with uTP. Only kept while it can still
+// matter: the client has the fallback, uTP is otherwise off, and this torrent
+// has not switched yet. Bounded by maxFailedDials, dropping entries older than
+// the requeue window first and then the oldest.
 func (t *Torrent) recordFailedDialLocked(p PeerInfo) {
+	if !t.cl.config.UTPFallback || !t.cl.config.DisableUTP || t.utpFallback {
+		return
+	}
 	if t.failedDials == nil {
 		t.failedDials = make(map[string]failedDialCandidate)
 	}
@@ -2961,13 +2975,24 @@ func (t *Torrent) recordFailedDialLocked(p PeerInfo) {
 		peer:     p,
 		failedAt: now,
 	}
-	if len(t.failedDials) > 500 {
-		cutoff := now.Add(-15 * time.Minute)
+	if len(t.failedDials) <= maxFailedDials {
+		return
+	}
+	cutoff := now.Add(-failedDialRequeueWindow)
+	for k, v := range t.failedDials {
+		if v.failedAt.Before(cutoff) {
+			delete(t.failedDials, k)
+		}
+	}
+	for len(t.failedDials) > maxFailedDials {
+		var oldestKey string
+		var oldest time.Time
 		for k, v := range t.failedDials {
-			if v.failedAt.Before(cutoff) {
-				delete(t.failedDials, k)
+			if oldestKey == "" || v.failedAt.Before(oldest) {
+				oldestKey, oldest = k, v.failedAt
 			}
 		}
+		delete(t.failedDials, oldestKey)
 	}
 }
 
@@ -2975,7 +3000,7 @@ func (t *Torrent) redialFailedCandidatesLocked() {
 	if len(t.failedDials) == 0 {
 		return
 	}
-	cutoff := time.Now().Add(-10 * time.Minute)
+	cutoff := time.Now().Add(-failedDialRequeueWindow)
 	var toRequeue []PeerInfo
 	for _, fd := range t.failedDials {
 		requeue := false
@@ -2993,6 +3018,8 @@ func (t *Torrent) redialFailedCandidatesLocked() {
 	for _, p := range toRequeue {
 		t.peers.Add(p)
 	}
+	// Recording stops once the torrent has switched; drop what is left.
+	t.failedDials = nil
 }
 
 // SetUTPFallback enables or disables uTP fallback for this torrent.

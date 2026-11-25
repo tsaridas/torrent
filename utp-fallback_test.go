@@ -230,3 +230,44 @@ func TestUTPFallbackRedialsFailedCandidates(t *testing.T) {
 		t.Fatal("timed out waiting for re-queued peer to connect over uTP")
 	}
 }
+
+// TestUTPFallbackFailedDialRecording checks that failed dials are only kept
+// while a switch could still use them, and that the list stays bounded.
+func TestUTPFallbackFailedDialRecording(t *testing.T) {
+	record := func(tt *Torrent, n int) {
+		tt.cl.lock()
+		defer tt.cl.unlock()
+		for i := range n {
+			tt.recordFailedDialLocked(PeerInfo{Addr: ipPortAddr{net.IPv4(10, 0, byte(i>>8), byte(i)), 6881}})
+		}
+	}
+	count := func(tt *Torrent) int {
+		tt.cl.lock()
+		defer tt.cl.unlock()
+		return len(tt.failedDials)
+	}
+	newTorrent := func(fallback bool) *Torrent {
+		cfg := TestingConfig(t)
+		cfg.DisableUTP = true
+		cfg.UTPFallback = fallback
+		cl, err := NewClient(cfg)
+		qt.Assert(t, qt.IsNil(err))
+		t.Cleanup(func() { cl.Close() })
+		tt, err := cl.AddTorrent(testutil.GreetingMetaInfo())
+		qt.Assert(t, qt.IsNil(err))
+		return tt
+	}
+
+	off := newTorrent(false)
+	record(off, 10)
+	qt.Check(t, qt.Equals(count(off), 0))
+
+	on := newTorrent(true)
+	record(on, maxFailedDials+50)
+	qt.Check(t, qt.Equals(count(on), maxFailedDials))
+
+	on.SetUTPFallback(true)
+	qt.Check(t, qt.Equals(count(on), 0))
+	record(on, 10)
+	qt.Check(t, qt.Equals(count(on), 0))
+}
