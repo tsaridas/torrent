@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"sort"
 	"time"
 )
 
@@ -75,41 +76,8 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 
 	inFlight := t.shadowInFlightLocked()
 	sent, chunks := 0, 0
-	for pos := off; pos < total && chunks < maxChunks && inFlight < maxShadowInFlight; {
-		pi := pieceIndex(pos / pieceLen)
-		if int(pi) >= t.numPieces() {
-			break
-		}
-		pieceStart := int64(pi) * pieceLen
-		pieceEnd := pieceStart + int64(t.pieceLength(pi))
-		if pieceEnd <= pos {
-			nextPiecePos := pieceStart + pieceLen
-			if nextPiecePos <= pos {
-				break
-			}
-			pos = nextPiecePos
-			continue
-		}
-		if t.pieceComplete(pi) {
-			pos = pieceEnd
-			continue
-		}
-		p := t.piece(pi)
-		ci := chunkIndexType((pos - pieceStart) / chunkSize)
-		if ci >= p.numChunks() {
-			pos = pieceEnd
-			continue
-		}
-		chunkEnd := pieceStart + (int64(ci)+1)*chunkSize
-		if chunkEnd > pieceEnd {
-			chunkEnd = pieceEnd
-		}
-		pos = chunkEnd
-		if p.chunkIndexDirty(ci) {
-			continue
-		}
+	sendChunk := func(pi pieceIndex, ri RequestIndex) {
 		chunks++
-		ri := t.pieceRequestIndexOffset(pi) + RequestIndex(ci)
 		holder := t.requestingPeer(ri)
 		asked := 0
 		for _, c := range conns {
@@ -148,6 +116,108 @@ func (t *Torrent) ShadowRequestAhead(off int64, maxChunks, perChunk int) int {
 			sent++
 			inFlight++
 		}
+	}
+
+	pos := off
+	// When Piece0Spread is on for whole-piece waits (maxChunks >= 8), rank the
+	// blocking piece's missing chunks by worst holder first (unrequested, then
+	// stalled/oldest 0 B/s holder, then lowest holder rate) so stragglers anywhere
+	// in piece 0 are shadowed before chunks already arriving from fast peers.
+	if t.cl.config.Piece0Spread && maxChunks >= 8 && pos < total {
+		pi0 := pieceIndex(pos / pieceLen)
+		if int(pi0) < t.numPieces() {
+			pieceStart := int64(pi0) * pieceLen
+			pieceEnd := pieceStart + int64(t.pieceLength(pi0))
+			if pieceEnd > pos && !t.pieceComplete(pi0) {
+				p := t.piece(pi0)
+				startCI := chunkIndexType((pos - pieceStart) / chunkSize)
+				nChunks := p.numChunks()
+				type chunkCand struct {
+					ci       chunkIndexType
+					ri       RequestIndex
+					unreq    bool
+					rate     float64
+					reqSince time.Time
+				}
+				var cands []chunkCand
+				base := t.pieceRequestIndexOffset(pi0)
+				for ci := startCI; ci < nChunks; ci++ {
+					if p.chunkIndexDirty(ci) {
+						continue
+					}
+					ri := base + RequestIndex(ci)
+					h := t.requestingPeer(ri)
+					c := chunkCand{ci: ci, ri: ri}
+					if h == nil {
+						c.unreq = true
+					} else {
+						c.rate = h.downloadRate()
+						c.reqSince = t.requestState[ri].when
+					}
+					cands = append(cands, c)
+				}
+				sort.Slice(cands, func(i, j int) bool {
+					a, b := cands[i], cands[j]
+					if a.unreq != b.unreq {
+						return a.unreq
+					}
+					aZero, bZero := !a.unreq && a.rate == 0, !b.unreq && b.rate == 0
+					if aZero != bZero {
+						return aZero
+					}
+					if aZero && !a.reqSince.Equal(b.reqSince) {
+						return a.reqSince.Before(b.reqSince)
+					}
+					if a.rate != b.rate {
+						return a.rate < b.rate
+					}
+					return a.ci < b.ci
+				})
+				for _, c := range cands {
+					if chunks >= maxChunks || inFlight >= maxShadowInFlight {
+						break
+					}
+					sendChunk(pi0, c.ri)
+				}
+				pos = pieceEnd
+			}
+		}
+	}
+
+	for pos < total && chunks < maxChunks && inFlight < maxShadowInFlight {
+		pi := pieceIndex(pos / pieceLen)
+		if int(pi) >= t.numPieces() {
+			break
+		}
+		pieceStart := int64(pi) * pieceLen
+		pieceEnd := pieceStart + int64(t.pieceLength(pi))
+		if pieceEnd <= pos {
+			nextPiecePos := pieceStart + pieceLen
+			if nextPiecePos <= pos {
+				break
+			}
+			pos = nextPiecePos
+			continue
+		}
+		if t.pieceComplete(pi) {
+			pos = pieceEnd
+			continue
+		}
+		p := t.piece(pi)
+		ci := chunkIndexType((pos - pieceStart) / chunkSize)
+		if ci >= p.numChunks() {
+			pos = pieceEnd
+			continue
+		}
+		chunkEnd := pieceStart + (int64(ci)+1)*chunkSize
+		if chunkEnd > pieceEnd {
+			chunkEnd = pieceEnd
+		}
+		pos = chunkEnd
+		if p.chunkIndexDirty(ci) {
+			continue
+		}
+		sendChunk(pi, t.pieceRequestIndexOffset(pi)+RequestIndex(ci))
 	}
 	if sent > 0 {
 		torrent.Add(shadowRequestsSentVar, int64(sent))
