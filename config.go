@@ -300,11 +300,6 @@ type ClientConfig struct {
 	// pieces with a maintained Now-priority bitmap instead of scanning every
 	// peer piece with purePriority. Off restores the scan for A/B.
 	NowPieceBitmap bool
-	// Piece0Spread orders PiecePriorityNow requests by ascending piece index
-	// and, in ShadowRequestAhead, ranks the blocking piece's missing chunks by
-	// slowest/stalled holder first (unrequested, then 0 B/s oldest-first, then
-	// lowest downloadRate) instead of linear chunk offset order.
-	Piece0Spread bool
 }
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {

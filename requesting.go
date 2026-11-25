@@ -151,7 +151,7 @@ func (p *desiredPeerRequests) lessByValue(leftRequest, rightRequest RequestIndex
 	ml = ml.Int(
 		leftPiece.Availability,
 		rightPiece.Availability)
-	if priority == PiecePriorityReadahead || (t.cl != nil && t.cl.config.Piece0Spread && priority == PiecePriorityNow) {
+	if priority == PiecePriorityReadahead {
 		// TODO: For readahead in particular, it would be even better to consider distance from the
 		// reader position so that reads earlier in a torrent don't starve reads later in the
 		// torrent. This would probably require reconsideration of how readahead priority works.
