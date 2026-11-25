@@ -1,6 +1,8 @@
 package torrent
 
 import (
+	"time"
+
 	"github.com/anacrolix/torrent/mse"
 	pp "github.com/anacrolix/torrent/peer_protocol"
 )
@@ -29,6 +31,8 @@ type Callbacks struct {
 	SentRequest        []func(PeerRequestEvent)
 	PeerClosed         []func(*Peer)
 	NewPeer            []func(*Peer)
+	// Called the first time a unique peer address is accepted by Torrent.addPeer.
+	PeerLearned []func(PeerLearnedEvent)
 	// Called when a PeerConn has been added to a Torrent. It's finished all BitTorrent protocol
 	// handshakes, and is about to start sending and receiving BitTorrent messages. The extended
 	// handshake has not yet occurred. This is a good time to alter the supported extension
@@ -49,6 +53,12 @@ type NowPriorityStealEvent struct {
 	Existing     *Peer
 	StealerRate  float64
 	ExistingRate float64
+}
+
+type PeerLearnedEvent struct {
+	Torrent  *Torrent
+	PeerInfo PeerInfo
+	At       time.Time
 }
 
 type ReceivedUsefulDataEvent = PeerMessageEvent

@@ -1123,6 +1123,12 @@ func (cl *Client) runReceivedConn(c *PeerConn) {
 // Client lock must be held before entering this.
 func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 	pc.setTorrent(t)
+	if pc.RemoteAddr != nil {
+		if rec, ok := t.firstLearned[pc.RemoteAddr.String()]; ok {
+			pc.firstLearnedAt = rec.at
+			pc.firstLearnedSource = rec.source
+		}
+	}
 	cl := t.cl
 	for i, b := range cl.config.MinPeerExtensions {
 		if pc.PeerExtensionBytes[i]&b != b {

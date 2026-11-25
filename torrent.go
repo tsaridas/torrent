@@ -147,6 +147,9 @@ type Torrent struct {
 	// them. That encourages us to reconnect to peers that are well known in
 	// the swarm.
 	peers prioritizedPeers
+	// First time each candidate addr string was accepted by addPeer, keyed by
+	// PeerInfo.Addr.String(). Cleared on close.
+	firstLearned map[string]peerLearnedRecord
 	// Whether uTP fallback is enabled for this torrent.
 	utpFallback bool
 	// Failed dials recorded on this torrent, to allow re-queuing when uTP fallback is enabled.
@@ -370,6 +373,11 @@ func (t *Torrent) appendConns(ret []*PeerConn, f func(*PeerConn) bool) []*PeerCo
 	return ret
 }
 
+type peerLearnedRecord struct {
+	at     time.Time
+	source PeerSource
+}
+
 func (t *Torrent) addPeer(p PeerInfo) (added bool) {
 	cl := t.cl
 	torrent.Add(fmt.Sprintf("peers added by source %q", p.Source), 1)
@@ -381,6 +389,26 @@ func (t *Torrent) addPeer(p PeerInfo) (added bool) {
 			torrent.Add("peers not added because of bad addr", 1)
 			// cl.logger.Printf("peers not added because of bad addr: %v", p)
 			return false
+		}
+	}
+	if p.Addr != nil {
+		addrStr := p.Addr.String()
+		if _, seen := t.firstLearned[addrStr]; !seen {
+			if t.firstLearned == nil {
+				t.firstLearned = make(map[string]peerLearnedRecord)
+			}
+			learnedAt := time.Now()
+			t.firstLearned[addrStr] = peerLearnedRecord{
+				at:     learnedAt,
+				source: p.Source,
+			}
+			for _, cb := range cl.config.Callbacks.PeerLearned {
+				cb(PeerLearnedEvent{
+					Torrent:  t,
+					PeerInfo: p,
+					At:       learnedAt,
+				})
+			}
 		}
 	}
 	if replaced, ok := t.peers.AddReturningReplacedPeer(p); ok {
@@ -1092,6 +1120,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 	}
 	t.assertAllPiecesRelativeAvailabilityZero()
 	t.pex.Reset()
+	t.firstLearned = nil
 	t.cl.event.Broadcast()
 	t.pieceStateChanges.Close()
 	t.chunkWrites.Close()

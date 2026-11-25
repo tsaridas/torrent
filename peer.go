@@ -54,6 +54,8 @@ type (
 
 		lastMessageReceived     time.Time
 		completedHandshake      time.Time
+		firstLearnedAt          time.Time
+		firstLearnedSource      PeerSource
 		lastUsefulChunkReceived time.Time
 		lastChunkSent           time.Time
 
@@ -153,6 +155,30 @@ const (
 // yet.
 func (p *Peer) Torrent() *Torrent {
 	return p.t
+}
+
+// Outgoing reports whether this peer connection was initiated by the local client.
+func (p *Peer) Outgoing() bool {
+	return p.outgoing
+}
+
+// ConnectedAt returns when the peer completed the BitTorrent protocol handshake,
+// or zero if the handshake has not completed.
+func (p *Peer) ConnectedAt() time.Time {
+	return p.completedHandshake
+}
+
+// FirstLearnedAt returns when this peer's remote address was first added to
+// the torrent's candidate pool, or zero if unknown (such as inbound peers on
+// ephemeral TCP source ports).
+func (p *Peer) FirstLearnedAt() time.Time {
+	return p.firstLearnedAt
+}
+
+// FirstLearnedSource returns the PeerSource that first introduced this peer's
+// remote address into the torrent's candidate pool.
+func (p *Peer) FirstLearnedSource() PeerSource {
+	return p.firstLearnedSource
 }
 
 func (p *Peer) initRequestState() {
