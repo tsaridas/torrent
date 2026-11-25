@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -270,4 +271,98 @@ func TestUTPFallbackFailedDialRecording(t *testing.T) {
 	qt.Check(t, qt.Equals(count(on), 0))
 	record(on, 10)
 	qt.Check(t, qt.Equals(count(on), 0))
+}
+
+func TestUTPFallbackRequeuesInFlightTCPDialWhenSwitched(t *testing.T) {
+	seeder := utpDialDelaySeeder(t, func(cfg *ClientConfig) {
+		cfg.DisableTCP = true
+		cfg.DisableUTP = false
+	})
+
+	// Bind a stalling TCP listener on the same port as the uTP-only seeder so
+	// an initial TCP dial sits in halfOpen across SetUTPFallback(true).
+	tcpLn, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", seeder.LocalPort()))
+	if err != nil {
+		t.Skipf("cannot bind matching TCP port %d: %v", seeder.LocalPort(), err)
+	}
+	defer tcpLn.Close()
+
+	tcpAccepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := tcpLn.Accept()
+			if err != nil {
+				return
+			}
+			tcpAccepted <- c
+		}
+	}()
+
+	run := func(requeue bool) string {
+		cfg := TestingConfig(t)
+		cfg.DisableUTP = true
+		cfg.UTPFallback = true
+		cfg.UTPFallbackRequeueInflight = requeue
+		cfg.UTPDialDelay = 0
+		cfg.HandshakesTimeout = 150 * time.Millisecond
+		handshook := make(chan string, 1)
+		cfg.Callbacks.CompletedHandshake = func(pc *PeerConn, _ InfoHash) {
+			select {
+			case handshook <- pc.Network:
+			default:
+			}
+		}
+
+		cl, err := NewClient(cfg)
+		qt.Assert(t, qt.IsNil(err))
+		defer cl.Close()
+
+		tt, err := cl.AddTorrent(testutil.GreetingMetaInfo())
+		qt.Assert(t, qt.IsNil(err))
+		tt.DownloadAll()
+
+		tt.AddPeers([]PeerInfo{{Addr: ipPortAddr{net.IPv4(127, 0, 0, 1), seeder.LocalPort()}}})
+
+		var held net.Conn
+		select {
+		case held = <-tcpAccepted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for initial TCP dial")
+		}
+
+		// Flip fallback while the TCP dial is still in-flight (not yet in failedDials).
+		cl.lock()
+		inHalfOpen := len(tt.halfOpen)
+		inFailed := len(tt.failedDials)
+		cl.unlock()
+		qt.Assert(t, qt.Equals(inHalfOpen, 1))
+		qt.Assert(t, qt.Equals(inFailed, 0))
+
+		tt.SetUTPFallback(true)
+		// Let the TCP handshake stall/fail after the switch.
+		held.Close()
+		// Close any fallback-plaintext second attempt on the stalled TCP listener.
+		go func() {
+			for i := 0; i < 2; i++ {
+				select {
+				case c := <-tcpAccepted:
+					_ = c.Close()
+				case <-time.After(500 * time.Millisecond):
+					return
+				}
+			}
+		}()
+
+		select {
+		case netw := <-handshook:
+			return netw
+		case <-time.After(1 * time.Second):
+			return ""
+		}
+	}
+
+	qt.Check(t, qt.Equals(run(false), ""))
+	got := run(true)
+	qt.Assert(t, qt.Not(qt.Equals(got, "")))
+	qt.Check(t, qt.IsTrue(parseNetworkString(got).Udp))
 }

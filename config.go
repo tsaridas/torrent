@@ -113,6 +113,11 @@ type ClientConfig struct {
 	// for an opted-in torrent attempt uTP (with UTPDialDelay hold-back when TCP dialers exist),
 	// and holepunching is enabled for that torrent. Inbound uTP connections remain disabled.
 	UTPFallback bool
+	// UTPFallbackRequeueInflight re-queues an outgoing peer whose TCP-only dial
+	// started before SetUTPFallback(true) and finished failing afterwards, so
+	// half-open TCP dials caught mid-flight at the fallback switch still get
+	// retried once over uTP.
+	UTPFallbackRequeueInflight bool
 	// For the bittorrent protocol.
 	DisableTCP bool `long:"disable-tcp"`
 	// UTPDialDelay holds an outgoing uTP dial back until the TCP dials to the same address have

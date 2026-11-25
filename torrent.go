@@ -154,6 +154,8 @@ type Torrent struct {
 	utpFallback bool
 	// Failed dials recorded on this torrent, to allow re-queuing when uTP fallback is enabled.
 	failedDials map[string]failedDialCandidate
+	// Addresses already re-queued because their TCP-only dial failed after SetUTPFallback(true).
+	requeuedOnUTPFallback map[string]struct{}
 	// Whether we want to know more peers.
 	wantPeersEvent missinggo.Event
 	// An announcer for each tracker URL.
@@ -1121,6 +1123,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 	t.assertAllPiecesRelativeAvailabilityZero()
 	t.pex.Reset()
 	t.firstLearned = nil
+	t.requeuedOnUTPFallback = nil
 	t.cl.event.Broadcast()
 	t.pieceStateChanges.Close()
 	t.chunkWrites.Close()
@@ -3049,6 +3052,25 @@ func (t *Torrent) redialFailedCandidatesLocked() {
 	}
 	// Recording stops once the torrent has switched; drop what is left.
 	t.failedDials = nil
+}
+
+// requeueOnUTPFallbackLocked retries a peer once when its TCP-only dial
+// finished failing after SetUTPFallback(true) flipped while it was half-open.
+func (t *Torrent) requeueOnUTPFallbackLocked(p PeerInfo) {
+	if t.closed.IsSet() || p.Addr == nil || !t.utpFallback {
+		return
+	}
+	addrStr := p.Addr.String()
+	if _, seen := t.requeuedOnUTPFallback[addrStr]; seen {
+		return
+	}
+	if t.requeuedOnUTPFallback == nil {
+		t.requeuedOnUTPFallback = make(map[string]struct{})
+	}
+	t.requeuedOnUTPFallback[addrStr] = struct{}{}
+	t.peers.Add(p)
+	t.openNewConns()
+	t.cl.event.Broadcast()
 }
 
 // SetUTPFallback enables or disables uTP fallback for this torrent.

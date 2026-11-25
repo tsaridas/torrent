@@ -766,7 +766,7 @@ func doProtocolHandshakeOnDialResult(
 }
 
 // Returns nil connection and nil error if no connection could be established for valid reasons.
-func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, err error) {
+func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, usedUTP bool, err error) {
 	// It would be better if dial rate limiting could be tested when considering to open connections
 	// instead. Doing it here means if the limit is low, and the half-open limit is high, we could
 	// end up with lots of outgoing connection attempts pending that were initiated on stale data.
@@ -793,6 +793,7 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 		defer cancel()
 		dialers := cl.dialers
 		if opts.t != nil && opts.t.UTPFallback() && len(cl.fallbackDialers) > 0 {
+			usedUTP = true
 			dialers = append(slices.Clone(cl.dialers), cl.fallbackDialers...)
 		}
 		// uTP waits for TCP unless this dial answers a holepunch connect, which only works if it
@@ -909,7 +910,7 @@ func (cl *Client) outgoingConnection(
 	opts outgoingConnOpts,
 	attemptKey outgoingConnAttemptKey,
 ) {
-	c, err := cl.dialAndCompleteHandshake(opts)
+	c, usedUTP, err := cl.dialAndCompleteHandshake(opts)
 	if err == nil {
 		c.conn.SetWriteDeadline(time.Time{})
 	}
@@ -927,7 +928,11 @@ func (cl *Client) outgoingConnection(
 			)
 		}
 		if opts.t != nil {
-			opts.t.recordFailedDialLocked(opts.peerInfo)
+			if cl.config.UTPFallbackRequeueInflight && !usedUTP && opts.t.utpFallback {
+				opts.t.requeueOnUTPFallbackLocked(opts.peerInfo)
+			} else {
+				opts.t.recordFailedDialLocked(opts.peerInfo)
+			}
 		}
 		return
 	}
