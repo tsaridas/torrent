@@ -262,15 +262,19 @@ func TestUTPFallbackFailedDialRecording(t *testing.T) {
 	off := newTorrent(false)
 	record(off, 10)
 	qt.Check(t, qt.Equals(count(off), 0))
+	qt.Check(t, qt.Equals(off.Stats().FailedDials, 0))
 
 	on := newTorrent(true)
 	record(on, maxFailedDials+50)
 	qt.Check(t, qt.Equals(count(on), maxFailedDials))
+	qt.Check(t, qt.Equals(on.Stats().FailedDials, maxFailedDials))
 
 	on.SetUTPFallback(true)
 	qt.Check(t, qt.Equals(count(on), 0))
+	qt.Check(t, qt.Equals(on.Stats().FailedDials, 0))
 	record(on, 10)
 	qt.Check(t, qt.Equals(count(on), 0))
+	qt.Check(t, qt.Equals(on.Stats().FailedDials, 0))
 }
 
 func TestUTPFallbackRequeuesInFlightTCPDialWhenSwitched(t *testing.T) {

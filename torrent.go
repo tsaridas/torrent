@@ -2338,6 +2338,7 @@ func (t *Torrent) Stats() TorrentStats {
 func (t *Torrent) statsLocked() (ret TorrentStats) {
 	ret.ActivePeers = len(t.conns)
 	ret.HalfOpenPeers = len(t.halfOpen)
+	ret.FailedDials = len(t.failedDials)
 	ret.PendingPeers = t.peers.Len()
 	ret.TotalPeers = t.numTotalPeers()
 	ret.ConnectedSeeders = 0
