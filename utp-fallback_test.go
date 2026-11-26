@@ -3,6 +3,7 @@ package torrent
 import (
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -369,4 +370,74 @@ func TestUTPFallbackRequeuesInFlightTCPDialWhenSwitched(t *testing.T) {
 	got := run(true)
 	qt.Assert(t, qt.Not(qt.Equals(got, "")))
 	qt.Check(t, qt.IsTrue(parseNetworkString(got).Udp))
+}
+
+// TestRedialFailedPeersRequeuesWithoutUTP verifies that RedialFailedPeers
+// clears failedDials and retries the peers over normal TCP dialers without
+// enabling uTP fallback.
+func TestRedialFailedPeersRequeuesWithoutUTP(t *testing.T) {
+	cfg := TestingConfig(t)
+	cfg.DisableUTP = true
+	cfg.UTPFallback = true
+	handshook := make(chan string, 1)
+	cfg.Callbacks.CompletedHandshake = func(pc *PeerConn, _ InfoHash) {
+		select {
+		case handshook <- pc.Network:
+		default:
+		}
+	}
+	cl, err := NewClient(cfg)
+	qt.Assert(t, qt.IsNil(err))
+	defer cl.Close()
+
+	// Pick an unused local TCP port, let the first dial fail against it, then
+	// bring up a seeder bound to the same port and call RedialFailedPeers.
+	probeLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	qt.Assert(t, qt.IsNil(err))
+	port := probeLn.Addr().(*net.TCPAddr).Port
+	qt.Assert(t, qt.IsNil(probeLn.Close()))
+
+	tt, err := cl.AddTorrent(testutil.GreetingMetaInfo())
+	qt.Assert(t, qt.IsNil(err))
+	tt.DownloadAll()
+	tt.AddPeers([]PeerInfo{{Addr: ipPortAddr{net.IPv4(127, 0, 0, 1), port}}})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st := tt.Stats()
+		if st.FailedDials == 1 && st.PendingPeers == 0 && st.HalfOpenPeers == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for initial TCP dial to fail: %+v", st)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	dir, mi := testutil.GreetingTestTorrent()
+	defer os.RemoveAll(dir)
+	seederCfg := TestingConfig(t)
+	seederCfg.DisableUTP = true
+	seederCfg.ListenPort = port
+	seederCfg.Seed = true
+	seederCfg.DataDir = dir
+	seeder, err := NewClient(seederCfg)
+	if err != nil {
+		t.Skipf("could not rebind freed port %d: %v", port, err)
+	}
+	defer seeder.Close()
+	seederTorrent, err := seeder.AddTorrent(mi)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.IsTrue(seederTorrent.Seeding()))
+
+	qt.Check(t, qt.Equals(tt.RedialFailedPeers(), 1))
+	qt.Check(t, qt.Equals(tt.UTPFallback(), false))
+	qt.Check(t, qt.Equals(tt.Stats().FailedDials, 0))
+
+	select {
+	case netw := <-handshook:
+		qt.Check(t, qt.IsFalse(parseNetworkString(netw).Udp))
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for redialed TCP peer handshake: tt=%+v seeder=%v", tt.Stats(), seeder.ListenAddrs())
+	}
 }

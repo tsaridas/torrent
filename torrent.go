@@ -3030,9 +3030,9 @@ func (t *Torrent) recordFailedDialLocked(p PeerInfo) {
 	}
 }
 
-func (t *Torrent) redialFailedCandidatesLocked() {
+func (t *Torrent) redialFailedCandidatesLocked() int {
 	if len(t.failedDials) == 0 {
-		return
+		return 0
 	}
 	cutoff := time.Now().Add(-failedDialRequeueWindow)
 	var toRequeue []PeerInfo
@@ -3052,8 +3052,26 @@ func (t *Torrent) redialFailedCandidatesLocked() {
 	for _, p := range toRequeue {
 		t.peers.Add(p)
 	}
-	// Recording stops once the torrent has switched; drop what is left.
+	// Clear the table so fallback stops recording and TCP redial tracks fresh failures.
 	t.failedDials = nil
+	return len(toRequeue)
+}
+
+// RedialFailedPeers re-queues recent failedDials entries over the normal dialers
+// without enabling uTP fallback, clearing failedDials the same way SetUTPFallback
+// does, and returning how many peers were queued.
+func (t *Torrent) RedialFailedPeers() int {
+	t.cl.lock()
+	defer t.cl.unlock()
+	if t.closed.IsSet() {
+		return 0
+	}
+	n := t.redialFailedCandidatesLocked()
+	if n > 0 {
+		t.openNewConns()
+		t.cl.event.Broadcast()
+	}
+	return n
 }
 
 // requeueOnUTPFallbackLocked retries a peer once when its TCP-only dial
