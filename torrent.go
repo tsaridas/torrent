@@ -156,6 +156,9 @@ type Torrent struct {
 	failedDials map[string]failedDialCandidate
 	// Addresses already re-queued because their TCP-only dial failed after SetUTPFallback(true).
 	requeuedOnUTPFallback map[string]struct{}
+	// Per-peer uTP retry state when ClientConfig.UTPPerPeer is enabled
+	// (1 = queued for uTP retry, 2 = already consumed uTP retry).
+	perPeerUTP map[string]uint8
 	// Whether we want to know more peers.
 	wantPeersEvent missinggo.Event
 	// An announcer for each tracker URL.
@@ -1125,6 +1128,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 	t.pex.Reset()
 	t.firstLearned = nil
 	t.requeuedOnUTPFallback = nil
+	t.perPeerUTP = nil
 	t.cl.event.Broadcast()
 	t.pieceStateChanges.Close()
 	t.chunkWrites.Close()
@@ -3091,6 +3095,55 @@ func (t *Torrent) requeueOnUTPFallbackLocked(p PeerInfo) {
 	t.peers.Add(p)
 	t.openNewConns()
 	t.cl.event.Broadcast()
+}
+
+const (
+	perPeerUTPQueued = 1
+	perPeerUTPTried  = 2
+	maxPerPeerUTP    = 4096
+)
+
+// requeuePerPeerUTPLocked retries a single peer once with uTP after its initial
+// TCP-only dial failed, without switching the whole torrent to uTP fallback.
+func (t *Torrent) requeuePerPeerUTPLocked(p PeerInfo) bool {
+	if t.closed.IsSet() || p.Addr == nil || t.utpFallback {
+		return false
+	}
+	addrStr := p.Addr.String()
+	if _, seen := t.perPeerUTP[addrStr]; seen {
+		return false
+	}
+	if len(t.perPeerUTP) >= maxPerPeerUTP {
+		return false
+	}
+	if t.perPeerUTP == nil {
+		t.perPeerUTP = make(map[string]uint8)
+	}
+	t.perPeerUTP[addrStr] = perPeerUTPQueued
+	t.peers.Add(p)
+	t.openNewConns()
+	t.cl.event.Broadcast()
+	return true
+}
+
+// allowUTPDialForPeer reports whether outgoing dials to addr should include
+// fallbackDialers right now (either torrent-wide uTP fallback or a one-shot
+// per-peer retry queued by requeuePerPeerUTPLocked).
+func (t *Torrent) allowUTPDialForPeer(addr PeerRemoteAddr) bool {
+	t.cl.lock()
+	defer t.cl.unlock()
+	if t.utpFallback {
+		return true
+	}
+	if addr == nil || len(t.perPeerUTP) == 0 {
+		return false
+	}
+	addrStr := addr.String()
+	if t.perPeerUTP[addrStr] == perPeerUTPQueued {
+		t.perPeerUTP[addrStr] = perPeerUTPTried
+		return true
+	}
+	return false
 }
 
 // SetUTPFallback enables or disables uTP fallback for this torrent.

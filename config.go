@@ -118,6 +118,11 @@ type ClientConfig struct {
 	// half-open TCP dials caught mid-flight at the fallback switch still get
 	// retried once over uTP.
 	UTPFallbackRequeueInflight bool
+	// UTPPerPeer keeps initial peer dials TCP-only (and inbound uTP off),
+	// and when a peer's TCP dial fails, re-queues that individual peer once
+	// to retry with uTP (respecting UTPDialDelay) without flipping uTP for
+	// the whole torrent.
+	UTPPerPeer bool
 	// For the bittorrent protocol.
 	DisableTCP bool `long:"disable-tcp"`
 	// UTPDialDelay holds an outgoing uTP dial back until the TCP dials to the same address have

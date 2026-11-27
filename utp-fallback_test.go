@@ -441,3 +441,87 @@ func TestRedialFailedPeersRequeuesWithoutUTP(t *testing.T) {
 		t.Fatalf("timed out waiting for redialed TCP peer handshake: tt=%+v seeder=%v", tt.Stats(), seeder.ListenAddrs())
 	}
 }
+
+// TestUTPPerPeerRetriesOnceAfterTCPFailure verifies that with UTPPerPeer enabled,
+// TCP-only peers stay on TCP, a peer whose TCP dial fails retries once over uTP
+// while tt.UTPFallback() remains false, and retries happen at most once per peer.
+func TestUTPPerPeerRetriesOnceAfterTCPFailure(t *testing.T) {
+	utpSeeder := utpDialDelaySeeder(t, func(cfg *ClientConfig) {
+		cfg.DisableTCP = true
+		cfg.DisableUTP = false
+	})
+	tcpSeeder := utpDialDelaySeeder(t, func(cfg *ClientConfig) {
+		cfg.DisableTCP = false
+		cfg.DisableUTP = true
+	})
+
+	cfg := TestingConfig(t)
+	cfg.DisableUTP = true
+	cfg.UTPPerPeer = true
+	cfg.UTPFallback = true
+	cfg.UTPDialDelay = 500 * time.Millisecond
+	cfg.NominalDialTimeout = time.Second
+	cfg.MinDialTimeout = 200 * time.Millisecond
+	handshook := make(chan string, 4)
+	cfg.Callbacks.CompletedHandshake = func(pc *PeerConn, _ InfoHash) {
+		handshook <- pc.Network
+	}
+	cl, err := NewClient(cfg)
+	qt.Assert(t, qt.IsNil(err))
+	defer cl.Close()
+	qt.Assert(t, qt.IsTrue(len(cl.fallbackDialers) > 0))
+	for _, d := range cl.dialers {
+		qt.Check(t, qt.IsFalse(parseNetworkString(d.DialerNetwork()).Udp))
+	}
+
+	// Peer 1: TCP-capable peer must stay on TCP and never trigger uTP.
+	ttTCP, err := cl.AddTorrent(testutil.GreetingMetaInfo())
+	qt.Assert(t, qt.IsNil(err))
+	ttTCP.DownloadAll()
+	ttTCP.AddPeers([]PeerInfo{{Addr: ipPortAddr{net.IPv4(127, 0, 0, 1), tcpSeeder.LocalPort()}}})
+	select {
+	case netw := <-handshook:
+		qt.Check(t, qt.IsTrue(parseNetworkString(netw).Tcp))
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for TCP peer")
+	}
+	qt.Check(t, qt.Equals(ttTCP.UTPFallback(), false))
+	ttTCP.Drop()
+
+	// Peer 2: uTP-only peer fails TCP, retries once over uTP, and succeeds while UTPFallback stays false.
+	// Also verify an unreachable peer only gets one uTP retry before landing in failedDials.
+	closedLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	qt.Assert(t, qt.IsNil(err))
+	closedPort := closedLn.Addr().(*net.TCPAddr).Port
+	qt.Assert(t, qt.IsNil(closedLn.Close()))
+
+	ttUTP, err := cl.AddTorrent(testutil.GreetingMetaInfo())
+	qt.Assert(t, qt.IsNil(err))
+	ttUTP.DownloadAll()
+	ttUTP.AddPeers([]PeerInfo{
+		{Addr: ipPortAddr{net.IPv4(127, 0, 0, 1), utpSeeder.LocalPort()}},
+		{Addr: ipPortAddr{net.IPv4(127, 0, 0, 1), closedPort}},
+	})
+	select {
+	case netw := <-handshook:
+		qt.Check(t, qt.IsTrue(parseNetworkString(netw).Udp))
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for per-peer uTP retry")
+	}
+	qt.Check(t, qt.Equals(ttUTP.UTPFallback(), false))
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st := ttUTP.Stats()
+		if st.FailedDials == 1 && st.PendingPeers == 0 && st.HalfOpenPeers == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for closed peer to exhaust single uTP retry: %+v", st)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cl.lock()
+	qt.Check(t, qt.Equals(ttUTP.perPeerUTP[ipPortAddr{net.IPv4(127, 0, 0, 1), closedPort}.String()], uint8(perPeerUTPTried)))
+	cl.unlock()
+}

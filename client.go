@@ -298,7 +298,7 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 			if cl.config.AcceptPeerConnections {
 				go cl.acceptConnections(s)
 			}
-		} else if cl.config.DisableUTP && cl.config.UTPFallback && netw.Udp {
+		} else if cl.config.DisableUTP && (cl.config.UTPFallback || cl.config.UTPPerPeer) && netw.Udp {
 			// Inbound uTP stays off: accepting inbound uTP for torrents with fallback on
 			// would require an accept loop plus an infohash check after handshake that
 			// we don't need for the thin swarm. We only use this socket for outgoing fallback dials.
@@ -409,7 +409,7 @@ func (cl *Client) listenOnNetwork(n network) bool {
 	if n.Tcp && cl.config.DisableTCP {
 		return false
 	}
-	if n.Udp && cl.config.DisableUTP && !cl.config.UTPFallback && cl.config.NoDHT {
+	if n.Udp && cl.config.DisableUTP && !cl.config.UTPFallback && !cl.config.UTPPerPeer && cl.config.NoDHT {
 		return false
 	}
 	return true
@@ -792,7 +792,7 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
 		dialers := cl.dialers
-		if opts.t != nil && opts.t.UTPFallback() && len(cl.fallbackDialers) > 0 {
+		if opts.t != nil && len(cl.fallbackDialers) > 0 && opts.t.allowUTPDialForPeer(addr) {
 			usedUTP = true
 			dialers = append(slices.Clone(cl.dialers), cl.fallbackDialers...)
 		}
@@ -930,6 +930,8 @@ func (cl *Client) outgoingConnection(
 		if opts.t != nil {
 			if cl.config.UTPFallbackRequeueInflight && !usedUTP && opts.t.utpFallback {
 				opts.t.requeueOnUTPFallbackLocked(opts.peerInfo)
+			} else if cl.config.UTPPerPeer && !usedUTP && !opts.t.utpFallback && len(cl.fallbackDialers) > 0 && opts.t.requeuePerPeerUTPLocked(opts.peerInfo) {
+				// Re-queued once to retry with uTP; do not also record in failedDials yet.
 			} else {
 				opts.t.recordFailedDialLocked(opts.peerInfo)
 			}
