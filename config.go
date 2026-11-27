@@ -298,6 +298,14 @@ type ClientConfig struct {
 	// immediately. The grace still applies between peers of comparable speed, which is the
 	// cancel storm it exists to bound. See nowPriorityHotswapAllowed.
 	NowPriorityHotswap bool
+	// NowPriorityUntestedElsewhere keeps a peer that has delivered nothing off
+	// PiecePriorityNow pieces entirely: its requests go to the next, lower
+	// priority pieces in the heap, as torrent-stream sends an untested wire's
+	// one request away from the playhead. If a pass would leave such a peer
+	// with no request at all (the playhead is all there is to fetch), it gets
+	// the first now-priority request it skipped, so it can still prove itself.
+	// Peers that have delivered are unaffected.
+	NowPriorityUntestedElsewhere bool
 	// EndgamePeerBudget is retained for the Stremio app / A/B wiring
 	// (STREMIOSRV_ENDGAME_PEER_BUDGET). EndgamePiece itself does not read it:
 	// the caller's maxChunks<=0 selects whole-piece per-peer room, and

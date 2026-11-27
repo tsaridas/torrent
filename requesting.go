@@ -347,6 +347,10 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 	// pipeline) on every heap pop was milliseconds under the write lock with
 	// hundreds of peers. The budget does not change within this loop.
 	maxReq := p.nominalMaxRequests()
+	// See ClientConfig.NowPriorityUntestedElsewhere.
+	untestedElsewhere := t.cl.config.NowPriorityUntestedElsewhere && myRate <= 0
+	var skippedNow RequestIndex
+	haveSkippedNow := false
 	for {
 		if requestHeap.Len() == 0 {
 			break
@@ -371,6 +375,13 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		existing := t.requestingPeer(req)
 		// Skipping here sends the restricted peer on to the next, lower
 		// priority request in the heap -- torrent-stream's "go elsewhere".
+		if untestedElsewhere && existing != p && t.pieceIsNowPriority(req) {
+			if existing == nil && !haveSkippedNow {
+				skippedNow, haveSkippedNow = req, true
+			}
+			torrent.Add(nowPriorityUntestedSkipsVar, 1)
+			continue
+		}
 		countsTowardNow := false
 		if restricted && existing != p && t.pieceIsNowPriority(req) {
 			if c := nowCapFor(t.pieceIndexOfRequestIndex(req)); c >= 0 {
@@ -470,6 +481,11 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		if !more {
 			break
 		}
+	}
+	if more && haveSkippedNow && current.Requests.IsEmpty() &&
+		p.needRequestUpdate != peerUpdateRequestsRemoteRejectReason &&
+		t.requestingPeer(skippedNow) == nil {
+		more = p.mustRequest(skippedNow)
 	}
 	if !more {
 		// This might fail if we incorrectly determine that we can fit up to the maximum allowed
@@ -706,3 +722,8 @@ func nowPriorityHotswapAllowed(stealerRate, holderRate float64, stealerLast, now
 	}
 	return holderRate < slowRate && 2*holderRate <= stealerRate
 }
+
+// nowPriorityUntestedSkipsVar is the expvar key (in the "torrent" map)
+// counting now-priority requests an untested peer was sent away from under
+// ClientConfig.NowPriorityUntestedElsewhere.
+const nowPriorityUntestedSkipsVar = "now-priority untested skips"
