@@ -291,6 +291,13 @@ type ClientConfig struct {
 	// requests at a time stays near a handful in flight however fast it is.
 	// Untested peers are unaffected; see NowPriorityRestrictedPeerRequests.
 	TorrentStreamPipeline bool
+	// NowPriorityHotswap lets a delivering peer take a PiecePriorityNow request from a slow
+	// holder at once, without waiting out StealRequestGrace. It is torrent-stream's onhotswap:
+	// a wire that finds the playhead piece fully reserved takes back the blocks of a holder
+	// slower than SPEED_THRESHOLD (NowPrioritySlowPeerRate) and under half its own speed,
+	// immediately. The grace still applies between peers of comparable speed, which is the
+	// cancel storm it exists to bound. See nowPriorityHotswapAllowed.
+	NowPriorityHotswap bool
 	// EndgamePeerBudget is retained for the Stremio app / A/B wiring
 	// (STREMIOSRV_ENDGAME_PEER_BUDGET). EndgamePiece itself does not read it:
 	// the caller's maxChunks<=0 selects whole-piece per-peer room, and

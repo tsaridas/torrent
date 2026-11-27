@@ -447,7 +447,13 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			// above compare queue depths, which say nothing about whether the block is already
 			// on the wire; see ClientConfig.StealRequestGrace.
 			if !t.stealRequestGraceElapsed(req) {
-				continue
+				cfg := t.cl.config
+				if !cfg.NowPriorityHotswap || !t.pieceIsNowPriority(req) ||
+					!nowPriorityHotswapAllowed(p.downloadRate(), existing.downloadRate(),
+						p.lastUsefulChunkReceived, time.Now(), cfg.NowPrioritySlowPeerRate) {
+					continue
+				}
+				torrent.Add(nowPriorityHotswapsVar, 1)
 			}
 			// Report only steals that happen: grace can still veto above.
 			if speedSteal != nil {
@@ -669,4 +675,34 @@ func peerRestrictedForNowPriority(downloadRate, slowRate float64) bool {
 		return true
 	}
 	return downloadRate < slowRate
+}
+
+// nowPriorityHotswapsVar is the expvar key (in the "torrent" map) counting
+// now-priority requests taken from a slow holder inside StealRequestGrace.
+const nowPriorityHotswapsVar = "now-priority hotswaps"
+
+// nowPriorityHotswapMinRate is torrent-stream's floor for a wire allowed to
+// hotswap: one block per second (speed < BLOCK_SIZE returns early).
+const nowPriorityHotswapMinRate = 16 * 1024
+
+// nowPriorityHotswapAllowed mirrors torrent-stream's onhotswap test for
+// skipping StealRequestGrace: the stealer must be delivering right now
+// (a useful chunk within nowPriorityRecentDelivery) at no less than
+// nowPriorityHotswapMinRate, and the holder must be below slowRate
+// (SPEED_THRESHOLD) and at most half the stealer's rate. An untested holder
+// has rate 0, so any delivering peer may take its block; two untested peers
+// can never hotswap each other, so the cold-start carousel described on
+// stealAllowedBySpeed cannot come back. slowRate <= 0 uses
+// DefaultNowPrioritySlowPeerRate.
+func nowPriorityHotswapAllowed(stealerRate, holderRate float64, stealerLast, now time.Time, slowRate float64) bool {
+	if stealerLast.IsZero() || now.Sub(stealerLast) > nowPriorityRecentDelivery {
+		return false
+	}
+	if stealerRate < nowPriorityHotswapMinRate {
+		return false
+	}
+	if slowRate <= 0 {
+		slowRate = DefaultNowPrioritySlowPeerRate
+	}
+	return holderRate < slowRate && 2*holderRate <= stealerRate
 }
